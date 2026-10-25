@@ -1,0 +1,18 @@
+[gd_scene load_steps=5 format=3 uid="uid://main001"]
+
+[ext_resource type="Script" path="res://scripts/main.gd" id="1_main"]
+[ext_resource type="Script" path="res://scripts/map_tenement.gd" id="2_map"]
+[ext_resource type="PackedScene" uid="uid://player001" path="res://scenes/player.tscn" id="3_player"]
+[ext_resource type="Script" path="res://scripts/hud.gd" id="4_hud"]
+
+[node name="Main" type="Node3D"]
+script = ExtResource("1_main")
+
+[node name="Map" type="Node3D" parent="."]
+script = ExtResource("2_map")
+
+[node name="Player" parent="." instance=ExtResource("3_player")]
+transform = Transform3D(-1, 0, 0, 0, 1, 0, 0, 0, -1, 0, 0.1, 2)
+
+[node name="HUD" type="CanvasLayer" parent="."]
+script = ExtResource("4_hud")

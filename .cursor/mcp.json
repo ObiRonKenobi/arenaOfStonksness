@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "blender": {
+      "command": "C:\\Users\\sudol\\AppData\\Local\\Microsoft\\WinGet\\Packages\\astral-sh.uv_Microsoft.Winget.Source_8wekyb3d8bbwe\\uvx.exe",
+      "args": ["mcp-for-blender"]
+    },
+    "godot": {
+      "command": "C:\\Users\\sudol\\AppData\\Local\\Microsoft\\WinGet\\Packages\\astral-sh.uv_Microsoft.Winget.Source_8wekyb3d8bbwe\\uvx.exe",
+      "args": ["godot-editor-mcp"],
+      "env": {
+        "GODOT_MCP_BRIDGE_URL": "ws://127.0.0.1:9081"
+      }
+    },
+    "nano-banana": {
+      "command": "C:\\Program Files\\nodejs\\npx.cmd",
+      "args": ["-y", "nano-banana-mcp"]
+    }
+  }
+}
