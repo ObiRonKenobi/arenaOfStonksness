@@ -21,21 +21,6 @@ const SHOTS := {
 }
 const RELOAD_SFX := preload("res://assets/audio/reload_ak.wav")
 const SHOT_HEAVY := preload("res://assets/audio/shot_deagle.wav")
-const VIEWMODELS := {
-	"pipe_pistol": "res://assets/weapons/pistol.glb",
-	"pop_junk": "res://assets/weapons/pistol.glb",
-	"street_smg": "res://assets/weapons/smg.glb",
-	"debt_shotgun": "res://assets/weapons/shotgun.glb",
-	"rent_rifle": "res://assets/weapons/rifle.glb",
-}
-# Grip at the mount, barrel down the camera. Scale is uniform. Yaw turns the pack's barrel onto -Z.
-const VIEW_POSE := {
-	"res://assets/weapons/pistol.glb": {"scale": 0.037, "yaw": 90.0, "pos": Vector3(0.0, -0.021, -0.044)},
-	"res://assets/weapons/smg.glb": {"scale": 0.0876, "yaw": 90.0, "pos": Vector3(-0.006, -0.009, 0.081)},
-	"res://assets/weapons/shotgun.glb": {"scale": 0.07, "yaw": 180.0, "pos": Vector3(0.0, -0.02, -0.22)},
-	"res://assets/weapons/rifle.glb": {"scale": 0.068, "yaw": 180.0, "pos": Vector3(0.0, -0.02, -0.2)},
-	"res://assets/weapons/pistol_v2.glb": {"scale": 0.16, "yaw": 90.0, "pos": Vector3(0.02, -0.06, -0.02)},
-}
 const MOUSE_SENS := 0.0022
 const GRAVITY := 20.0
 const JUMP_SPEED := 6.2
@@ -781,11 +766,6 @@ func _play_gunshot(side: int) -> void:
 	_gunshot.volume_db = 1.5 if heavy else -4.0
 	_gunshot.pitch_scale = randf_range(0.94, 1.0) if side == 0 else randf_range(1.02, 1.08)
 	_gunshot.play()
-
-func _viewmodel_path() -> String:
-	if weapon_id == "pipe_pistol" and weapon_tier >= 2:
-		return "res://assets/weapons/pistol_v2.glb"
-	return str(VIEWMODELS.get(weapon_id, VIEWMODELS["pipe_pistol"]))
 
 func _arm_rig() -> Dictionary:
 	if weapon_id in ["street_smg", "debt_shotgun", "rent_rifle"]:
