@@ -3,13 +3,13 @@
 importer="scene"
 importer_version=1
 type="PackedScene"
-uid="uid://bl2hdi7axhej4"
-path="res://.godot/imported/lazy.glb-2a73c4e400942380f08c138cc981beb3.scn"
+uid="uid://c2n2enbaecogm"
+path="res://.godot/imported/sci_sniper.glb-f446739c29860fd38888b6912de2ab43.scn"
 
 [deps]
 
-source_file="res://assets/characters/lazy.glb"
-dest_files=["res://.godot/imported/lazy.glb-2a73c4e400942380f08c138cc981beb3.scn"]
+source_file="res://assets/weapons/sci_sniper.glb"
+dest_files=["res://.godot/imported/sci_sniper.glb-f446739c29860fd38888b6912de2ab43.scn"]
 
 [params]
 

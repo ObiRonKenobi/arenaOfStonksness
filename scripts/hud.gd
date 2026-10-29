@@ -12,6 +12,12 @@ var _over: Control
 var _over_label: Label
 var _toast_time := 0.0
 var _crosshair: Label
+var _hail: Label
+var _menu_home: Control
+var _menu_page: Control
+var _page_title: Label
+var _page_body: Label
+var _page_open := false
 
 func _ready() -> void:
 	add_to_group("hud")
@@ -32,6 +38,7 @@ func _ready() -> void:
 		_on_ult(float(player.get("ult")))
 	GameState.round_changed.connect(func(index): _wave.text = "Wave %d" % index)
 	GameState.toast_requested.connect(show_toast)
+	GameState.king_hail.connect(_on_hail)
 	GameState.game_over.connect(_on_over)
 
 func _process(delta: float) -> void:
@@ -108,6 +115,17 @@ func _build_hud() -> void:
 	_crosshair.visible = false
 	_crosshair.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(_crosshair)
+	_hail = _label("Hail to the King, Baby!")
+	_hail.set_anchors_preset(Control.PRESET_CENTER)
+	_hail.offset_left = -420
+	_hail.offset_top = -40
+	_hail.offset_right = 420
+	_hail.offset_bottom = 40
+	_hail.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_hail.add_theme_font_size_override("font_size", 42)
+	_hail.visible = false
+	_hail.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(_hail)
 
 func _build_menu() -> void:
 	_menu = ColorRect.new()
@@ -119,22 +137,48 @@ func _build_menu() -> void:
 	center.set_anchors_preset(Control.PRESET_FULL_RECT)
 	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_menu.add_child(center)
-	var box := VBoxContainer.new()
-	box.custom_minimum_size = Vector2(520, 0)
-	box.add_theme_constant_override("separation", 14)
-	center.add_child(box)
+	_menu_home = VBoxContainer.new()
+	_menu_home.custom_minimum_size = Vector2(520, 0)
+	_menu_home.add_theme_constant_override("separation", 14)
+	center.add_child(_menu_home)
 	var title := _label("Arena of Stonksness")
 	title.add_theme_font_size_override("font_size", 36)
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	box.add_child(title)
-	var help := _label("Click anywhere or press Enter.\nWASD move, Space jump, mouse look, click shoot, right mouse aims, E buy or board, Q ult.\n1 and 2, or the mouse wheel, switch weapons.")
-	help.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	box.add_child(help)
+	_menu_home.add_child(title)
 	var start := Button.new()
 	start.text = "Start match"
 	start.custom_minimum_size = Vector2(280, 52)
 	start.pressed.connect(_start_solo)
-	box.add_child(start)
+	_menu_home.add_child(start)
+	var how := Button.new()
+	how.text = "How to Play"
+	how.custom_minimum_size = Vector2(220, 40)
+	how.pressed.connect(_open_how)
+	_menu_home.add_child(how)
+	var credits := Button.new()
+	credits.text = "Credits"
+	credits.custom_minimum_size = Vector2(220, 40)
+	credits.pressed.connect(_open_credits)
+	_menu_home.add_child(credits)
+	_menu_page = VBoxContainer.new()
+	_menu_page.custom_minimum_size = Vector2(560, 0)
+	_menu_page.add_theme_constant_override("separation", 12)
+	_menu_page.visible = false
+	center.add_child(_menu_page)
+	_page_title = _label("")
+	_page_title.add_theme_font_size_override("font_size", 32)
+	_page_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_menu_page.add_child(_page_title)
+	_page_body = _label("")
+	_page_body.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_page_body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_page_body.custom_minimum_size = Vector2(520, 0)
+	_menu_page.add_child(_page_body)
+	var back := Button.new()
+	back.text = "Back"
+	back.custom_minimum_size = Vector2(220, 40)
+	back.pressed.connect(_close_page)
+	_menu_page.add_child(back)
 
 func _build_over() -> void:
 	_over = ColorRect.new()
@@ -158,13 +202,44 @@ func _build_over() -> void:
 	again.pressed.connect(func(): get_tree().reload_current_scene())
 	box.add_child(again)
 
+func _open_how() -> void:
+	_show_page("How to Play", "WASD move. Mouse look. Space jump.\nLeft click shoots. Right mouse aims. Right click also fires the offhand while holding two pistols.\nR reloads.\nE buys or interacts. Hold E at a window to board it.\nQ uses your ult.\n1 and 2, or the mouse wheel, switch weapons.\nEsc releases the mouse.")
+
+func _open_credits() -> void:
+	_show_page("Credits", "An RBYT3R Production\n\nWith Much Thanks To:\nQuaternius\nKenney\nJ-Toastie\nburunduk\nuniversfield\nsound-work")
+
+func _show_page(title: String, body: String) -> void:
+	_page_open = true
+	_page_title.text = title
+	_page_body.text = body
+	_menu_home.visible = false
+	_menu_page.visible = true
+
+func _close_page() -> void:
+	_page_open = false
+	_menu_page.visible = false
+	_menu_home.visible = true
+
+func _on_hail() -> void:
+	_hail.visible = true
+	_hail.text = "Hail to the King, Baby!"
+	var timer := get_tree().create_timer(2.2)
+	timer.timeout.connect(func():
+		if is_instance_valid(_hail):
+			_hail.visible = false
+	)
+
 func _menu_click(event: InputEvent) -> void:
+	if _page_open:
+		return
 	if event is InputEventMouseButton:
 		var click := event as InputEventMouseButton
 		if click.pressed and click.button_index == MOUSE_BUTTON_LEFT:
 			_start_solo()
 
 func _unhandled_input(event: InputEvent) -> void:
+	if _page_open:
+		return
 	if _menu.visible and (event.is_action_pressed("ui_accept") or event.is_action_pressed("shoot")):
 		_start_solo()
 

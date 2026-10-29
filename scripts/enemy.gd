@@ -7,7 +7,11 @@ const MOAN_SFX := preload("res://assets/audio/horde_moan.wav")
 const GRAVITY := 20.0
 const STEP_HEIGHT := 0.45
 const DEATH_TIME := 1.7
-var archetype := "collector"
+const SWING := 0.7
+const IMPACT := 0.38
+const REACH := 1.15
+var archetype := "broker"
+var _suit_name := "navy"
 var hp := 40.0
 var speed := 2.2
 var attack := 8.0
@@ -23,6 +27,7 @@ var _model: Node3D
 var _anim: AnimationPlayer
 var _clip := ""
 var _lock := 0.0
+var _swing_t := -1.0
 var _death_t := 0.0
 var _corpse_floor := 0.0
 var _wander_phase := 0.0
@@ -42,6 +47,7 @@ func setup(kind: String, health: float, move_speed: float, door: Node3D) -> void
 	match kind:
 		"broker":
 			attack = 7.0
+			_suit_name = _pick_suit()
 		"king":
 			attack = 16.0
 	_wear_model()
@@ -60,11 +66,27 @@ func _physics_process(delta: float) -> void:
 	var slow := 1.0
 	if player and player.has_method("market_crash_active") and player.call("market_crash_active"):
 		slow = 0.45
-	if player and str(player.get("ult_active")) == "dreads":
+	if player and str(player.get("ult_active")) == "punk_f":
 		slow = minf(slow, 0.7)
 	_slow = slow
 	if _door and (int(_door.get("boards")) <= 0) and (_climbing or global_position.z < -6.85):
 		_climb_through_window(delta)
+		return
+	if _swing_t >= 0.0:
+		var before := _swing_t
+		_swing_t += delta
+		if before < IMPACT and _swing_t >= IMPACT:
+			_land_hit(player)
+		if _swing_t >= SWING:
+			_swing_t = -1.0
+		velocity.x = 0.0
+		velocity.z = 0.0
+		_sync_clip(false, true)
+		if not is_on_floor():
+			velocity.y -= GRAVITY * delta
+		else:
+			velocity.y = -1.0
+		move_and_slide()
 		return
 	var target := global_position
 	var attacking_door := false
@@ -79,8 +101,6 @@ func _physics_process(delta: float) -> void:
 			target = _stair_target()
 		else:
 			target = player.global_position
-		if not upstairs and global_position.distance_to(player.global_position) < 1.35:
-			_hit_player(player)
 	if not attacking_door:
 		var dir := target - global_position
 		dir.y = 0.0
@@ -98,9 +118,13 @@ func _physics_process(delta: float) -> void:
 				velocity.x = dir.x * speed * _slow
 				velocity.z = dir.z * speed * _slow
 			look_at(global_position + dir, Vector3.UP)
+			if player and target == player.global_position and _in_strike(player):
+				_begin_swing()
 		else:
 			velocity.x = 0.0
 			velocity.z = 0.0
+			if player and target == player.global_position and _in_strike(player):
+				_begin_swing()
 	else:
 		velocity.x = 0.0
 		velocity.z = 0.0
@@ -148,7 +172,7 @@ func take_damage(amount: float, source: Node, headshot: bool = false) -> void:
 	if _dead:
 		return
 	var bonus := 0
-	if source and str(source.get("ult_active")) == "hobo":
+	if source and str(source.get("ult_active")) == "cowboy":
 		bonus = 45 + GameState.round_index * 5
 	var dealt := amount
 	if headshot:
@@ -168,6 +192,8 @@ func take_damage(amount: float, source: Node, headshot: bool = false) -> void:
 			drop += 40 + GameState.round_index * 10
 		source.call("add_cash", 0)
 		_drop_cash(drop)
+		if _suit_name == "purple":
+			_drop_supply("health" if randi() % 2 == 0 else "ammo")
 		source.call("add_ult", 8.0)
 	_die()
 
@@ -261,20 +287,51 @@ func _hit_door() -> void:
 	_cool = 0.7
 	_door.call("chip", 1)
 
-func _hit_player(player: Node) -> void:
-	if _cool > 0.0:
+func _begin_swing() -> void:
+	if _cool > 0.0 or _swing_t >= 0.0:
 		return
-	_cool = 0.85
-	player.call("take_damage", attack)
+	_swing_t = 0.0
+	_cool = SWING + 0.45
 	_sync_clip(false, true)
+	_lock = SWING
+
+func _land_hit(player: Node3D) -> void:
+	if player == null or not _in_strike(player):
+		return
+	player.call("take_damage", attack)
+
+func _in_strike(player: Node3D) -> bool:
+	var to := player.global_position - global_position
+	to.y = 0.0
+	var dist := to.length()
+	if dist > REACH or dist < 0.001:
+		return false
+	var forward := -global_transform.basis.z
+	forward.y = 0.0
+	if forward.length() < 0.01:
+		return false
+	return forward.normalized().dot(to / dist) >= 0.55
 
 func _drop_cash(amount: int) -> void:
+	_spawn_pickup("cash", amount)
+
+func _drop_supply(supply_kind: String) -> void:
+	_spawn_pickup(supply_kind, 0)
+
+func _spawn_pickup(supply_kind: String, cash_amount: int) -> void:
 	var pickup := preload("res://scenes/cash_pickup.tscn").instantiate()
-	pickup.amount = amount
+	pickup.kind = supply_kind
+	pickup.amount = cash_amount
 	var parent := get_parent()
 	if parent:
 		parent.add_child(pickup)
-		pickup.global_position = global_position + Vector3(0, 0.4, 0)
+		var place := Vector3(0.0, 0.4, 0.0) if supply_kind == "cash" else Vector3(0.55, 0.4, 0.15)
+		pickup.global_position = global_position + place
+
+func _pick_suit() -> String:
+	if randi() % 15 == 0:
+		return "purple"
+	return ["navy", "grey", "black"][randi() % 3]
 
 func _process(_delta: float) -> void:
 	if _anim == null or _clip == "":
@@ -451,7 +508,23 @@ func _ink(node: Node) -> void:
 			flat.albedo_color = base.albedo_color
 			flat.albedo_texture = base.albedo_texture
 			flat.vertex_color_use_as_albedo = base.vertex_color_use_as_albedo
+			if _suit_name != "navy" and _is_suit(base):
+				flat.albedo_texture = null
+				flat.albedo_color = _suit_color()
 		mesh_inst.set_surface_override_material(surface, flat)
+
+func _is_suit(mat: BaseMaterial3D) -> bool:
+	return "suit" in String(mat.resource_name).to_lower()
+
+func _suit_color() -> Color:
+	match _suit_name:
+		"grey":
+			return Color(0.46, 0.47, 0.5)
+		"black":
+			return Color(0.07, 0.07, 0.08)
+		"purple":
+			return Color(0.42, 0.16, 0.58)
+	return Color(0.12, 0.16, 0.32)
 
 func _paint() -> void:
 	var color := Color(0.82, 0.68, 0.2)

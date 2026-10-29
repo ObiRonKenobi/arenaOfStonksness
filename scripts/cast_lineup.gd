@@ -1,10 +1,10 @@
 extends Node3D
 
-const CAST := ["punk", "hobo", "dreads", "lazy", "collector", "king"]
+const CAST := ["punk", "cowboy", "worker", "punk_f"]
 
 func _ready() -> void:
 	for i in CAST.size():
-		_place(CAST[i], -4.5 + float(i) * 1.8)
+		_place(CAST[i], -2.7 + float(i) * 1.8)
 
 func _place(id: String, x: float) -> void:
 	var path := "res://assets/characters/%s.glb" % id

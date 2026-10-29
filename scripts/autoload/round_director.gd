@@ -19,6 +19,8 @@ var _spawned := 0
 var _spawn_wait := 0.0
 var _between := 0.0
 var _in_round := false
+var _king_phase := false
+var _king_next := false
 
 func _ready() -> void:
 	GameState.match_started.connect(_on_match_started)
@@ -32,7 +34,11 @@ func _process(delta: float) -> void:
 	if _between > 0.0:
 		_between -= delta
 		if _between <= 0.0:
-			_start_round(GameState.round_index + 1)
+			if _king_next:
+				_king_next = false
+				_begin_kings()
+			else:
+				_start_round(GameState.round_index + 1)
 		return
 	if not _in_round:
 		return
@@ -45,10 +51,21 @@ func _process(delta: float) -> void:
 			_spawn_wait = maxf(0.6, 1.2 - float(GameState.round_index) * 0.02)
 	elif _alive <= 0:
 		_in_round = false
+		if _king_phase:
+			_king_phase = false
+			_between = INTERMISSION
+			intermission_started.emit(INTERMISSION)
+			GameState.toast("Buy time. Next wave in %d seconds." % int(INTERMISSION))
+			return
 		GameState.mark_round_cleared()
-		_between = INTERMISSION
-		intermission_started.emit(INTERMISSION)
-		GameState.toast("Buy time. Next wave in %d seconds." % int(INTERMISSION))
+		var gap := INTERMISSION
+		if GameState.round_index % 5 == 0:
+			_king_next = true
+			gap = INTERMISSION + 4.0
+			GameState.hail_king()
+		_between = gap
+		intermission_started.emit(gap)
+		GameState.toast("Buy time. Next wave in %d seconds." % int(gap))
 
 func _on_match_started() -> void:
 	_stop()
@@ -60,6 +77,8 @@ func _stop() -> void:
 	_budget = 0
 	_spawned = 0
 	_alive = 0
+	_king_phase = false
+	_king_next = false
 
 func _start_round(index: int) -> void:
 	GameState.set_round(index)
@@ -72,6 +91,18 @@ func _start_round(index: int) -> void:
 	_in_round = true
 	_emit_counts()
 	GameState.toast("Wave %d" % index)
+
+func _begin_kings() -> void:
+	_king_phase = true
+	_players = _player_count()
+	_alive_cap = 8 + 4 * (_players - 1)
+	_budget = _wave_budget(maxi(GameState.round_index, 1), _players)
+	_spawned = 0
+	_alive = 0
+	_spawn_wait = 0.4
+	_in_round = true
+	_emit_counts()
+	GameState.toast("King round")
 
 func _spawn_one() -> void:
 	var map := get_tree().get_first_node_in_group("map")
@@ -87,28 +118,23 @@ func _spawn_one() -> void:
 	map.add_child(enemy)
 	enemy.global_position = door.spawn_position()
 	enemy.setup(archetype, stats.hp, stats.speed, door)
-	enemy.died.connect(_on_enemy_died)
+	enemy.died.connect(_on_enemy_died.bind(enemy))
 	_spawned += 1
 	_alive += 1
 	_emit_counts()
 
-func _on_enemy_died() -> void:
+func _on_enemy_died(enemy: Node = null) -> void:
 	_alive = maxi(0, _alive - 1)
+	if _king_phase and _alive <= 0 and _spawned >= _budget and enemy is Node3D:
+		_drop_king_ammo((enemy as Node3D).global_position)
 	if _spawned < _budget and _alive < _alive_cap:
 		_spawn_wait = 0.0
 	_emit_counts()
 
 func _roll_archetype() -> String:
-	var round_index := GameState.round_index
-	var bag: Array[String] = ["collector"]
-	if round_index >= 3:
-		bag.append("broker")
-		bag.append("broker")
-	if round_index >= 5:
-		bag.append("king")
-	if round_index >= 8:
-		bag.append("king")
-	return bag[randi() % bag.size()]
+	if _king_phase:
+		return "king"
+	return "broker"
 
 func _stats_for(archetype: String) -> Dictionary:
 	var round_index := GameState.round_index
@@ -119,9 +145,18 @@ func _stats_for(archetype: String) -> Dictionary:
 			hp *= 0.82
 			speed *= 1.28
 		"king":
-			hp *= 2.35
-			speed *= 0.82
+			hp *= 0.41
+			speed *= 2.15
 	return {"hp": hp, "speed": speed}
+
+func _drop_king_ammo(at: Vector3) -> void:
+	var map := get_tree().get_first_node_in_group("map")
+	if map == null:
+		return
+	var pickup := preload("res://scenes/cash_pickup.tscn").instantiate()
+	pickup.kind = "full"
+	map.add_child(pickup)
+	pickup.global_position = at + Vector3(-0.55, 0.4, 0.15)
 
 func _player_count() -> int:
 	var count := 1

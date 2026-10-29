@@ -9,26 +9,32 @@ signal weapon_changed
 const SPEED := 5.6
 const HIP_FOV := 75.0
 const ADS_FOV := 60.0
+const ADS_FOV_LONG := 50.0
 const HIP_GUN := Vector3(0.24, -0.2, -0.42)
 const ADS_GUN := Vector3(0.0, -0.11, -0.5)
 const RELOAD_GUN := Vector3(0.1, -0.42, -0.32)
 const SHOTS := {
 	"pipe_pistol": preload("res://assets/audio/shot_9mm.wav"),
-	"street_smg": preload("res://assets/audio/shot_9mm.wav"),
+	"street_smg": preload("res://assets/audio/gunshot.wav"),
 	"pop_junk": preload("res://assets/audio/shot_22.wav"),
 	"debt_shotgun": preload("res://assets/audio/shot_20g.wav"),
 	"rent_rifle": preload("res://assets/audio/shot_556.wav"),
 }
 const RELOAD_SFX := preload("res://assets/audio/reload_ak.wav")
 const SHOT_HEAVY := preload("res://assets/audio/shot_deagle.wav")
+const SHOT_BLASTER := preload("res://assets/audio/sci_blaster.mp3")
+const SHOT_SCI_GUN := preload("res://assets/audio/sci_gunshot.mp3")
+const FLASH_GUN := preload("res://assets/fx/muzzle_gun.png")
+const FLASH_LASER := preload("res://assets/fx/muzzle_laser.png")
 const MOUSE_SENS := 0.0022
 const GRAVITY := 20.0
 const JUMP_SPEED := 6.2
 const STEP_HEIGHT := 0.45
+const BOARD_HOLD := 0.8
 
 var health := 100.0
 var max_health := 100.0
-var cash := 500
+var cash := 999999
 var planks := 12
 var weapon_id := "pipe_pistol"
 var weapon_tier := 1
@@ -47,6 +53,8 @@ var ult_time := 0.0
 var _nap_invuln := false
 var _fire_cd := 0.0
 var _reload := 0.0
+var _off_reload := 0.0
+var _off_cd := 0.0
 var _bleed := 0.0
 var _downed := false
 var yaw := 0.0
@@ -62,6 +70,12 @@ var _reload_clip := ""
 var _burst_left := 0
 var _burst_side := 0
 var _burst_gap := 0.0
+var _board_time := 0.0
+var _board_target: Node = null
+var _muzzle_flashes: Array[MeshInstance3D] = []
+var _muzzle_guns: Array[Node3D] = []
+var _muzzle_time := 0.0
+var _nozzle := 0
 
 @onready var head: Node3D = $Head
 @onready var camera: Camera3D = $Head/Camera3D
@@ -129,16 +143,22 @@ func _physics_process(delta: float) -> void:
 	if _reload > 0.0:
 		_reload -= delta
 		if _reload <= 0.0:
-			_finish_reload()
+			_finish_reload(0 if _akimbo() else -1)
+	if _akimbo() and _off_reload > 0.0:
+		_off_reload -= delta
+		if _off_reload <= 0.0:
+			_finish_reload(1)
 	if _fire_cd > 0.0:
 		_fire_cd -= delta
+	if _off_cd > 0.0:
+		_off_cd -= delta
 	_tick_burst(delta)
 	if _full_auto() and Input.is_action_pressed("shoot"):
 		_fire_one(0)
-	elif _uses_burst() and _burst_left <= 0 and _fire_cd <= 0.0:
-		if Input.is_action_pressed("shoot"):
+	elif _uses_burst() and _burst_left <= 0:
+		if Input.is_action_pressed("shoot") and not _side_reloading(0):
 			_pull_trigger(0)
-		elif _akimbo() and Input.is_action_pressed("aim"):
+		elif _akimbo() and Input.is_action_pressed("aim") and not _side_reloading(1):
 			_pull_trigger(1)
 	_hold_idle()
 	var wish := Vector3.ZERO
@@ -156,14 +176,14 @@ func _physics_process(delta: float) -> void:
 	var aiming := Input.is_action_pressed("aim") and _reload <= 0.0 and not _akimbo()
 	_aim = move_toward(_aim, 1.0 if aiming else 0.0, delta * 7.0)
 	if _gun_mount:
-		var hip := Vector3(0.0, -0.18, -0.42) if _akimbo() else HIP_GUN
+		var hip := Vector3(0.0, -0.14, -0.30) if _akimbo() else HIP_GUN
 		var held := hip if _akimbo() else hip.lerp(ADS_GUN, _aim)
 		var reloading := 0.0
-		if _reload > 0.0:
+		if _reload > 0.0 and not _akimbo():
 			reloading = sin(clampf(1.0 - _reload / 1.15, 0.0, 1.0) * PI)
 		_gun_mount.position = held.lerp(RELOAD_GUN, reloading)
 		_gun_mount.rotation_degrees.x = lerpf(0.0, 35.0, reloading)
-	camera.fov = lerpf(HIP_FOV, ADS_FOV, _aim)
+	camera.fov = lerpf(HIP_FOV, _ads_fov(), _aim)
 	var speed := SPEED * (1.45 if ult_active == "punk" else 1.0) * lerpf(1.0, 0.72, _aim)
 	velocity.x = wish.x * speed
 	velocity.z = wish.z * speed
@@ -177,6 +197,8 @@ func _physics_process(delta: float) -> void:
 	move_and_slide()
 	if wish.length() > 0.01:
 		_step_up(wish)
+	_tick_board(delta)
+	_tick_muzzle(delta)
 	_update_prompt()
 
 func take_damage(amount: float) -> void:
@@ -185,13 +207,34 @@ func take_damage(amount: float) -> void:
 	var taken := amount
 	if "tin_vest" in perks:
 		taken *= 0.75
-	if ult_active == "dreads":
+	if ult_active == "punk_f":
 		taken *= 0.55
 	health = maxf(0.0, health - taken)
 	add_ult(taken * 0.22)
 	health_changed.emit(health, max_health)
 	if health <= 0.0:
 		_down()
+
+func heal(amount: float) -> void:
+	if _downed:
+		return
+	health = minf(max_health, health + amount)
+	health_changed.emit(health, max_health)
+
+func refill_carried_ammo() -> void:
+	_store_slot()
+	for i in _slots.size():
+		var slot: Dictionary = _slots[i]
+		var id := str(slot.get("id", ""))
+		if id == "":
+			continue
+		var tier := int(slot.get("tier", 1))
+		slot.mag = _capacity_for(id, tier)
+		slot.offhand = slot.mag if id == "pipe_pistol" and tier >= 3 else 0
+		slot.reserve = _reserve_for(id, tier) + int(Economy.weapon(id).mag) * int(slot.get("smith_ammo", 0))
+		_slots[i] = slot
+	_read_slot()
+	ammo_changed.emit()
 
 func add_cash(amount: int) -> void:
 	cash = maxi(0, cash + amount)
@@ -257,6 +300,8 @@ func give_weapon(id: String, tier: int = 1, keep_smith: bool = false) -> void:
 	_slot = dest
 	_read_slot()
 	_reload = 0.0
+	_off_reload = 0.0
+	_off_cd = 0.0
 	_fire_cd = 0.0
 	ammo_changed.emit()
 	weapon_changed.emit()
@@ -341,14 +386,17 @@ func markup() -> bool:
 	if weapon_id == "pipe_pistol" and weapon_tier == 2:
 		mag = 21
 		reserve = 210
-	elif weapon_id == "rent_rifle" and weapon_tier == 2:
-		mag = 30
-		reserve = 300
 	else:
 		var after := _mag_capacity()
-		mag += maxi(0, after - before)
+		if weapon_id == "pipe_pistol":
+			mag += maxi(0, after - before)
+		else:
+			mag = after
 		if _akimbo():
 			offhand_mag = after
+		var scaled := _reserve_for(weapon_id, weapon_tier)
+		if reserve < scaled:
+			reserve = scaled
 	_burst_left = 0
 	weapon_changed.emit()
 	_store_slot()
@@ -357,9 +405,13 @@ func markup() -> bool:
 	elif weapon_id == "pipe_pistol" and weapon_tier == 3:
 		GameState.toast("Pipe Pistol v3. Two pistols, harder hits, bigger mags. Left and right mouse each fire one.")
 	elif weapon_id == "rent_rifle" and weapon_tier == 2:
-		GameState.toast("Rent Rifle v2. 3-round burst, 30-round mag.")
+		GameState.toast("Rent Rifle v2. 3-round burst, larger mag.")
 	elif weapon_id == "rent_rifle" and weapon_tier == 3:
 		GameState.toast("Rent Rifle v3. Full auto.")
+	elif weapon_id == "debt_shotgun" and weapon_tier == 2:
+		GameState.toast("Debt Collector v2. Both barrels, same spread.")
+	elif weapon_id == "debt_shotgun" and weapon_tier == 3:
+		GameState.toast("Debt Collector v3. Twin lasers, larger mag.")
 	else:
 		GameState.toast("%s is now %s." % [Economy.weapon(weapon_id).name, Economy.tier_label(weapon_tier)])
 	return true
@@ -368,19 +420,34 @@ func weapon_label() -> String:
 	return "%s %s" % [Economy.weapon(weapon_id).name, Economy.tier_label(weapon_tier)]
 
 func shot_damage() -> float:
-	if weapon_id == "pop_junk":
+	if weapon_id == "pop_junk" or weapon_id == "ledger_cannon":
 		var wave := GameState.round_index
-		return maxf(50.0, 220.0 - float(maxi(wave - 6, 0)) * 18.0)
+		return maxf(50.0, 220.0 - float(maxi(wave - 6, 0)) * 18.0) * _half_tier()
 	var base: float = float(Economy.weapon(weapon_id).damage)
-	base *= Economy.tier_multiplier(weapon_tier)
+	if weapon_id == "debt_shotgun" and weapon_tier >= 3:
+		base *= float(Economy.weapon(weapon_id).pellets)
+	if weapon_id == "pipe_pistol":
+		base *= Economy.tier_multiplier(weapon_tier)
+		base *= 1.0 + 0.15 * float(smith_damage)
+		if "mean_streak" in perks:
+			base *= 1.25
+		if weapon_tier >= 2:
+			base *= 1.08
+		if weapon_tier >= 3:
+			base *= 1.4
+		return base
+	base *= _half_tier()
 	base *= 1.0 + 0.15 * float(smith_damage)
 	if "mean_streak" in perks:
 		base *= 1.25
-	if weapon_tier >= 2:
-		base *= 1.08
-	if weapon_id == "pipe_pistol" and weapon_tier >= 3:
-		base *= 1.4
 	return base
+
+func _half_tier() -> float:
+	if weapon_tier >= 3:
+		return 2.5
+	if weapon_tier >= 2:
+		return 1.5
+	return 1.0
 
 func _on_character(id: String) -> void:
 	var color: Color = CharacterDB.info(id).get("color", Color.WHITE)
@@ -399,7 +466,7 @@ func _load_weapon(id: String, tier: int, fill: bool) -> void:
 	if fill:
 		mag = _mag_capacity()
 		offhand_mag = _mag_capacity() if _akimbo() else 0
-		reserve = int(spec.reserve) + extra
+		reserve = _reserve_for(id, tier) + extra
 	ammo_changed.emit()
 	weapon_changed.emit()
 
@@ -433,8 +500,9 @@ func _read_slot() -> void:
 	var slot: Dictionary = _slots[_slot]
 	weapon_id = str(slot.id)
 	weapon_tier = int(slot.tier)
-	mag = int(slot.mag)
-	offhand_mag = int(slot.get("offhand", 0))
+	var cap := _mag_capacity()
+	mag = mini(int(slot.mag), cap)
+	offhand_mag = mini(int(slot.get("offhand", 0)), cap) if _akimbo() else int(slot.get("offhand", 0))
 	reserve = int(slot.reserve)
 	smith_damage = int(slot.smith_damage)
 	smith_rate = int(slot.smith_rate)
@@ -456,6 +524,8 @@ func _switch_slot(index: int) -> void:
 	_slot = index
 	_read_slot()
 	_reload = 0.0
+	_off_reload = 0.0
+	_off_cd = 0.0
 	_fire_cd = 0.0
 	_burst_left = 0
 	ammo_changed.emit()
@@ -465,6 +535,10 @@ func _cycle_weapon() -> void:
 	_switch_slot(1 - _slot)
 
 func _uses_burst() -> bool:
+	if weapon_id == "ledger_cannon":
+		return true
+	if weapon_id == "pop_junk" and weapon_tier == 2:
+		return true
 	if weapon_id == "pipe_pistol" and weapon_tier >= 2:
 		return true
 	return weapon_id == "rent_rifle" and weapon_tier == 2
@@ -472,6 +546,8 @@ func _uses_burst() -> bool:
 func _full_auto() -> bool:
 	if _uses_burst():
 		return false
+	if weapon_id == "pop_junk" and weapon_tier >= 3:
+		return true
 	if weapon_id == "rent_rifle" and weapon_tier >= 3:
 		return true
 	return float(Economy.weapon(weapon_id).rate) >= 8.0
@@ -491,17 +567,75 @@ func _akimbo() -> bool:
 	return weapon_id == "pipe_pistol" and weapon_tier >= 3
 
 func _mag_capacity() -> int:
-	var base := int(Economy.weapon(weapon_id).mag)
-	if weapon_id == "pipe_pistol" and weapon_tier >= 3:
-		return base * 4
-	if weapon_id == "pipe_pistol" and weapon_tier >= 2:
+	return _capacity_for(weapon_id, weapon_tier)
+
+func _capacity_for(id: String, tier: int) -> int:
+	if id == "ledger_cannon":
+		return 3
+	if id == "debt_shotgun" and tier == 2:
+		return 2
+	var base := int(Economy.weapon(id).mag)
+	if id == "pipe_pistol" and tier >= 3:
+		return 33
+	if id == "pipe_pistol" and tier >= 2:
 		return 21
-	if weapon_id == "rent_rifle" and weapon_tier >= 2:
+	if tier >= 3:
+		return _snap_mag(id, int(round(float(base) * 2.5)))
+	if tier >= 2:
+		return _snap_mag(id, int(round(float(base) * 1.81)))
+	return _snap_mag(id, base)
+
+func _snap_mag(id: String, count: int) -> int:
+	if id != "ledger_cannon":
+		return maxi(1, count)
+	return maxi(3, int(round(float(count) / 3.0)) * 3)
+
+func _reserve_for(id: String, tier: int) -> int:
+	if id == "ledger_cannon":
 		return 30
-	return base
+	var stock := int(Economy.weapon(id).reserve)
+	if id == "pipe_pistol" and tier >= 2:
+		return 210
+	if tier >= 2:
+		var scaled := int(round(float(stock) * 2.69))
+		if id == "ledger_cannon":
+			scaled = maxi(3, int(round(float(scaled) / 3.0)) * 3)
+		return scaled
+	return stock
+
+func _shells_per_shot() -> int:
+	if weapon_id == "debt_shotgun" and weapon_tier >= 2:
+		return 2
+	return 1
+
+func _chamber(side: int) -> int:
+	return offhand_mag if side == 1 else mag
+
+func _side_reloading(side: int) -> bool:
+	if _akimbo() and side == 1:
+		return _off_reload > 0.0
+	return _reload > 0.0
+
+func _cd_for(side: int) -> float:
+	if _akimbo() and side == 1:
+		return _off_cd
+	return _fire_cd
+
+func _set_cd(side: int, value: float) -> void:
+	if _akimbo() and side == 1:
+		_off_cd = value
+	else:
+		_fire_cd = value
 
 func _pull_trigger(side: int) -> void:
-	if _downed or _reload > 0.0 or _burst_left > 0 or _fire_cd > 0.0:
+	if _downed or _burst_left > 0:
+		return
+	if _side_reloading(side):
+		return
+	if _chamber(side) < _shells_per_shot():
+		_start_reload(side if _akimbo() else -1)
+		return
+	if _cd_for(side) > 0.0:
 		return
 	if _uses_burst():
 		_burst_side = side
@@ -523,29 +657,41 @@ func _tick_burst(delta: float) -> void:
 	if _burst_left > 0:
 		_burst_gap = 0.07
 	else:
-		_fire_cd = 0.42
+		_set_cd(_burst_side, 0.42)
 
 func _fire_one(side: int) -> bool:
-	if _fire_cd > 0.0 or _reload > 0.0 or _downed:
+	if _cd_for(side) > 0.0 or _side_reloading(side) or _downed:
 		return false
-	var pool := offhand_mag if side == 1 else mag
-	if pool <= 0:
-		if _reload <= 0.0 and reserve > 0 and mag <= 0 and (not _akimbo() or offhand_mag <= 0):
-			_start_reload()
+	var shells := _shells_per_shot()
+	if _chamber(side) < shells:
+		_start_reload(side if _akimbo() else -1)
 		return false
 	if side == 1:
-		offhand_mag -= 1
+		offhand_mag -= shells
 	else:
-		mag -= 1
+		mag -= shells
 	ammo_changed.emit()
 	if not _uses_burst():
-		_fire_cd = 1.0 / _shots_per_second()
+		_set_cd(side, 1.0 / _shots_per_second())
 	_play_gunshot(side)
+	_pop_muzzle(side)
 	_play_view_clip("fire", 0.0, side)
 	var spec_shot := Economy.weapon(weapon_id)
 	var kick := -0.04 if side == 0 else 0.04
-	for _i in int(spec_shot.pellets):
-		_shoot_ray(float(spec_shot.spread), kick if _akimbo() else 0.0)
+	if weapon_id == "debt_shotgun" and weapon_tier >= 3:
+		_shoot_ray(0.02, -0.03)
+		_shoot_ray(0.02, 0.03)
+	elif weapon_id == "debt_shotgun" and weapon_tier == 2:
+		for bias in [-0.035, 0.035]:
+			for _i in int(spec_shot.pellets):
+				_shoot_ray(float(spec_shot.spread), bias)
+	else:
+		for _i in int(spec_shot.pellets):
+			_shoot_ray(float(spec_shot.spread), kick if _akimbo() else 0.0)
+	if _chamber(side) < shells:
+		_start_reload(side if _akimbo() else -1)
+	if weapon_id == "ledger_cannon":
+		_nozzle = (_nozzle + 1) % 3
 	return true
 
 func _shoot_ray(spread: float, hand_bias: float = 0.0) -> void:
@@ -561,15 +707,17 @@ func _shoot_ray(spread: float, hand_bias: float = 0.0) -> void:
 	var remain := 80.0
 	var skip: Array[RID] = [get_rid()]
 	var pierced := 0
+	var impact := origin + dir * 16.0
 	for _hop in 16:
 		if remain <= 0.05:
-			return
+			break
 		var query := PhysicsRayQueryParameters3D.create(from, from + dir * remain)
 		query.collision_mask = 3
 		query.exclude = skip
 		var hit := space.intersect_ray(query)
 		if hit.is_empty():
-			return
+			break
+		impact = hit.position
 		var body: Object = hit.collider
 		var node := body as Node
 		if node and node.is_in_group("enemies"):
@@ -578,8 +726,9 @@ func _shoot_ray(spread: float, hand_bias: float = 0.0) -> void:
 				dealt *= pow(0.85, float(pierced))
 			node.call("take_damage", dealt, self, _hit_head(body, hit))
 			pierced += 1
-			if weapon_id != "pop_junk" or pierced >= _laser_pierce():
-				return
+			var keep := weapon_id == "ledger_cannon" or (weapon_id == "pop_junk" and pierced < _laser_pierce())
+			if not keep:
+				break
 			if body is CollisionObject3D:
 				skip.append((body as CollisionObject3D).get_rid())
 			var hopped := from.distance_to(hit.position)
@@ -593,11 +742,12 @@ func _shoot_ray(spread: float, hand_bias: float = 0.0) -> void:
 		if not pass_through and near_lip:
 			pass_through = true
 		if not pass_through:
-			return
+			break
 		if body is CollisionObject3D:
 			skip.append((body as CollisionObject3D).get_rid())
 		remain -= traveled + 0.08
 		from = hit.position + dir * 0.08
+	_spawn_tracer(dir, impact, hand_bias)
 
 func _laser_pierce() -> int:
 	var wave := GameState.round_index
@@ -619,37 +769,91 @@ func _hit_head(body: Object, hit: Dictionary) -> bool:
 	var owner := col.shape_owner_get_owner(owner_id)
 	return owner is Node and str((owner as Node).name) == "Head"
 
-func _start_reload() -> void:
-	if _reload > 0.0 or reserve <= 0:
+func _start_reload(side: int = -1) -> void:
+	if reserve <= 0:
 		return
-	var cap := _mag_capacity()
-	var hungry := mag < cap or (_akimbo() and offhand_mag < cap)
-	if not hungry:
+	if not _akimbo():
+		if _reload > 0.0 or mag >= _mag_capacity():
+			return
+		_reload = 1.15
+		_burst_left = 0
+		_reload_sfx.play()
+		_play_view_clip("reload", 1.15)
 		return
-	_reload = 1.15
-	_burst_left = 0
-	_reload_sfx.play()
-	_play_view_clip("reload", 1.15)
+	var hands: Array[int] = []
+	if side < 0:
+		hands.append(0)
+		hands.append(1)
+	else:
+		hands.append(side)
+	var started := false
+	for hand in hands:
+		if _side_reloading(hand) or _chamber(hand) >= _mag_capacity():
+			continue
+		if hand == 1:
+			_off_reload = 1.15
+		else:
+			_reload = 1.15
+		if _burst_left > 0 and _burst_side == hand:
+			_burst_left = 0
+		_play_view_clip("reload", 1.15, hand)
+		started = true
+	if started:
+		_reload_sfx.play()
 
-func _finish_reload() -> void:
+func _finish_reload(side: int = -1) -> void:
 	var cap := _mag_capacity()
-	var into_left := mini(maxi(cap - mag, 0), reserve)
-	mag += into_left
-	reserve -= into_left
-	if _akimbo():
-		var into_right := mini(maxi(cap - offhand_mag, 0), reserve)
-		offhand_mag += into_right
-		reserve -= into_right
+	if not _akimbo() or side <= 0:
+		var into_main := mini(maxi(cap - mag, 0), reserve)
+		mag += into_main
+		reserve -= into_main
+	if _akimbo() and side == 1:
+		var into_off := mini(maxi(cap - offhand_mag, 0), reserve)
+		offhand_mag += into_off
+		reserve -= into_off
 	ammo_changed.emit()
 
 func _interact() -> void:
 	var hit := _look_hit(2.6)
-	if hit == null:
-		return
-	if hit.is_in_group("barricades"):
-		hit.call("board", self)
-	elif hit.is_in_group("stations"):
+	if hit != null and hit.is_in_group("stations"):
 		hit.call("use", self)
+
+func _tick_board(delta: float) -> void:
+	var door := _nearby_window()
+	if door == null or not Input.is_action_pressed("interact") or int(door.get("boards")) >= int(door.get("max_boards")):
+		_board_time = 0.0
+		_board_target = null
+		return
+	if door != _board_target:
+		_board_target = door
+		_board_time = 0.0
+	_board_time += delta
+	if _board_time >= BOARD_HOLD:
+		_board_time = 0.0
+		door.call("board", self)
+
+func _nearby_window() -> Node:
+	var best: Node = null
+	var best_d := 2.1
+	var facing := -global_transform.basis.z
+	facing.y = 0.0
+	if facing.length() < 0.01:
+		return null
+	facing = facing.normalized()
+	for node in get_tree().get_nodes_in_group("barricades"):
+		var body := node as Node3D
+		if body == null:
+			continue
+		var flat := body.global_position - global_position
+		flat.y = 0.0
+		var dist := flat.length()
+		if dist >= best_d or dist < 0.05:
+			continue
+		if facing.dot(flat / dist) < 0.2:
+			continue
+		best = body
+		best_d = dist
+	return best
 
 func _look_hit(distance: float) -> Node:
 	var origin := camera.global_position
@@ -669,11 +873,15 @@ func _update_prompt() -> void:
 	var hud := get_tree().get_first_node_in_group("hud")
 	if hud == null:
 		return
-	var hit := _look_hit(2.6)
-	if hit == null:
-		hud.call("set_prompt", "")
+	var door := _nearby_window()
+	if door != null and door.has_method("prompt_for"):
+		var text := str(door.call("prompt_for", self))
+		if door == _board_target and _board_time > 0.0:
+			text = "%s  %d%%" % [text, int((_board_time / BOARD_HOLD) * 100.0)]
+		hud.call("set_prompt", text)
 		return
-	if hit.has_method("prompt_for"):
+	var hit := _look_hit(2.6)
+	if hit != null and hit.has_method("prompt_for"):
 		hud.call("set_prompt", hit.call("prompt_for", self))
 	else:
 		hud.call("set_prompt", "")
@@ -688,13 +896,13 @@ func _try_ult() -> void:
 		"punk":
 			ult_time = 6.0
 			GameState.toast("Feedback Loop")
-		"hobo":
+		"cowboy":
 			ult_time = 5.0
 			GameState.toast("Market Crash")
-		"dreads":
+		"punk_f":
 			ult_time = 6.0
 			GameState.toast("Cloud Cover")
-		"lazy":
+		"worker":
 			ult_time = 2.6
 			_nap_invuln = true
 			health = minf(max_health, health + 20.0)
@@ -710,7 +918,7 @@ func _tick_ult(delta: float) -> void:
 		health_changed.emit(health, max_health)
 	if ult_time > 0.0:
 		return
-	if ult_active == "lazy":
+	if ult_active == "worker":
 		_nap_invuln = false
 		_shove()
 	ult_active = ""
@@ -721,7 +929,7 @@ func _shove() -> void:
 			node.call("knockback", global_position)
 
 func market_crash_active() -> bool:
-	return ult_active == "hobo"
+	return ult_active == "cowboy"
 
 func _down() -> void:
 	_downed = true
@@ -762,13 +970,299 @@ func _play_gunshot(side: int) -> void:
 	if _gunshot == null:
 		return
 	var heavy := weapon_id == "pipe_pistol" and weapon_tier >= 2
-	_gunshot.stream = SHOT_HEAVY if heavy else SHOTS.get(weapon_id, SHOTS["pipe_pistol"])
+	_gunshot.stream = _shot_stream()
 	_gunshot.volume_db = 1.5 if heavy else -4.0
-	_gunshot.pitch_scale = randf_range(0.94, 1.0) if side == 0 else randf_range(1.02, 1.08)
+	_gunshot.pitch_scale = randf_range(0.72, 0.8) if weapon_id == "ledger_cannon" else (randf_range(0.94, 1.0) if side == 0 else randf_range(1.02, 1.08))
 	_gunshot.play()
 
+func _shot_stream() -> AudioStream:
+	if weapon_id == "ledger_cannon" or weapon_id == "pop_junk":
+		return SHOT_BLASTER
+	if weapon_tier >= 3:
+		if weapon_id in ["street_smg", "rent_rifle"]:
+			return SHOT_SCI_GUN
+		return SHOT_BLASTER
+	if weapon_id == "pipe_pistol" and weapon_tier >= 2:
+		return SHOT_HEAVY
+	return SHOTS.get(weapon_id, SHOTS["pipe_pistol"])
+
+func _laser_muzzle() -> bool:
+	return weapon_id == "pop_junk" or weapon_id == "ledger_cannon" or weapon_tier >= 3
+
+func _flash_tex(laser: bool) -> Texture2D:
+	return FLASH_LASER if laser else FLASH_GUN
+
+func _muzzle_index(side: int) -> int:
+	if _akimbo() and _muzzle_guns.size() > 1:
+		return 0 if side == 1 else 1
+	return 0
+
+func _barrel_tip(side: int = 0) -> Vector3:
+	var fallback := camera.to_global(Vector3(0.18, -0.08, -0.62))
+	var tips := _live_muzzles(side)
+	if tips.is_empty():
+		return fallback
+	if weapon_id == "ledger_cannon":
+		return tips[_nozzle % tips.size()]
+	return tips[0]
+
+func _live_muzzles(side: int) -> PackedVector3Array:
+	var tips := PackedVector3Array()
+	if _muzzle_guns.is_empty():
+		return tips
+	var idx := _muzzle_index(side)
+	if idx >= _muzzle_guns.size():
+		idx = 0
+	var rig := _muzzle_guns[idx]
+	if rig == null or not is_instance_valid(rig):
+		return tips
+	for node in rig.find_children("*", "Skeleton3D", true, false):
+		(node as Skeleton3D).force_update_all_bone_transforms()
+	var held := rig.find_child("HeldGun", true, false) as Node3D
+	var host: Node = held if held != null else rig
+	var pts := _posed_points(host, held == null)
+	if pts.is_empty():
+		return tips
+	var cluster := _far_cluster(pts)
+	if weapon_id == "ledger_cannon":
+		return _split_nozzles(cluster)
+	tips.append(_cluster_center(cluster))
+	return tips
+
+func _posed_points(host: Node, stock_only: bool) -> PackedVector3Array:
+	var pts := PackedVector3Array()
+	var meshes: Array[Node] = []
+	if host is MeshInstance3D:
+		meshes.append(host)
+	meshes.append_array(host.find_children("*", "MeshInstance3D", true, false))
+	for node in meshes:
+		var mesh_inst := node as MeshInstance3D
+		if mesh_inst.mesh == null or not mesh_inst.visible or String(mesh_inst.name) == "MuzzleFlash":
+			continue
+		var n := String(mesh_inst.name).to_lower()
+		if "arm" in n or "hand" in n:
+			continue
+		if stock_only and not ("glock" in n or "akm" in n):
+			continue
+		var skel: Skeleton3D = null
+		if mesh_inst.skin != null and mesh_inst.skeleton != NodePath():
+			skel = mesh_inst.get_node_or_null(mesh_inst.skeleton) as Skeleton3D
+		if skel != null:
+			pts.append_array(_skinned_points(mesh_inst, skel))
+			continue
+		for s in mesh_inst.mesh.get_surface_count():
+			var verts := _surface_verts(mesh_inst.mesh, s)
+			var step := maxi(1, int(verts.size() / 300.0))
+			for i in range(0, verts.size(), step):
+				pts.append(mesh_inst.global_transform * verts[i])
+	return pts
+
+func _far_cluster(pts: PackedVector3Array) -> PackedVector3Array:
+	var cam := camera.global_position
+	var best := 0.0
+	for p in pts:
+		best = maxf(best, cam.distance_squared_to(p))
+	var limit := sqrt(best)
+	var band := maxf(0.03, limit * 0.03)
+	var cluster := PackedVector3Array()
+	for p in pts:
+		if cam.distance_to(p) >= limit - band:
+			cluster.append(p)
+	if cluster.is_empty():
+		cluster.append(pts[0])
+	return cluster
+
+func _cluster_center(cluster: PackedVector3Array) -> Vector3:
+	var acc := Vector3.ZERO
+	for p in cluster:
+		acc += p
+	var center := acc / float(cluster.size())
+	var away := center - camera.global_position
+	if away.length_squared() > 0.0001:
+		center += away.normalized() * 0.02
+	return center
+
+func _split_nozzles(cluster: PackedVector3Array) -> PackedVector3Array:
+	var axis := camera.global_transform.basis.x
+	var keyed: Array = []
+	for p in cluster:
+		keyed.append({"d": axis.dot(p), "p": p})
+	keyed.sort_custom(func(a, b): return float(a.d) < float(b.d))
+	var tips := PackedVector3Array()
+	var n := keyed.size()
+	if n < 3:
+		var lone := _cluster_center(cluster)
+		tips.append(lone)
+		tips.append(lone)
+		tips.append(lone)
+		return tips
+	var third := maxi(1, int(float(n) / 3.0))
+	for bin in 3:
+		var start := bin * third
+		var stop := n if bin == 2 else mini(n, (bin + 1) * third)
+		var acc := Vector3.ZERO
+		var count := 0
+		for i in range(start, stop):
+			acc += keyed[i].p
+			count += 1
+		var center := acc / float(maxi(count, 1))
+		var away := center - camera.global_position
+		if away.length_squared() > 0.0001:
+			center += away.normalized() * 0.02
+		tips.append(center)
+	return tips
+
+func _skinned_points(mesh_inst: MeshInstance3D, skel: Skeleton3D) -> PackedVector3Array:
+	var pts := PackedVector3Array()
+	var skin := mesh_inst.skin
+	if skin == null or mesh_inst.mesh == null:
+		return pts
+	for s in mesh_inst.mesh.get_surface_count():
+		var arrays: Array = mesh_inst.mesh.surface_get_arrays(s)
+		if arrays.is_empty() or arrays[Mesh.ARRAY_VERTEX] == null or arrays[Mesh.ARRAY_BONES] == null or arrays[Mesh.ARRAY_WEIGHTS] == null:
+			continue
+		var verts: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+		var joints: PackedInt32Array = arrays[Mesh.ARRAY_BONES]
+		var weights: PackedFloat32Array = arrays[Mesh.ARRAY_WEIGHTS]
+		var step := maxi(1, int(verts.size() / 300.0))
+		for i in range(0, verts.size(), step):
+			var basis := Basis(Vector3.ZERO, Vector3.ZERO, Vector3.ZERO)
+			var origin := Vector3.ZERO
+			for k in 4:
+				var w := weights[i * 4 + k]
+				if w < 0.001:
+					continue
+				var b := int(joints[i * 4 + k])
+				if b < 0 or b >= skel.get_bone_count() or b >= skin.get_bind_count():
+					continue
+				var posed := skel.get_bone_global_pose(b) * skin.get_bind_pose(b)
+				basis.x += posed.basis.x * w
+				basis.y += posed.basis.y * w
+				basis.z += posed.basis.z * w
+				origin += posed.origin * w
+			pts.append(skel.global_transform * (basis * verts[i] + origin))
+	return pts
+
+func _surface_verts(mesh: Mesh, surface: int) -> PackedVector3Array:
+	var arrays: Array = mesh.surface_get_arrays(surface)
+	if arrays.is_empty() or arrays.size() <= Mesh.ARRAY_VERTEX or arrays[Mesh.ARRAY_VERTEX] == null:
+		return PackedVector3Array()
+	return arrays[Mesh.ARRAY_VERTEX]
+
+func _register_muzzle(rig: Node3D) -> void:
+	_muzzle_guns.append(rig)
+	var flash := MeshInstance3D.new()
+	flash.name = "MuzzleFlash"
+	var span := 0.48
+	if weapon_id == "debt_shotgun":
+		span = 0.68
+	elif weapon_id == "rent_rifle":
+		span = 0.58
+	elif weapon_id == "street_smg":
+		span = 0.54
+	elif weapon_id == "ledger_cannon":
+		span = 0.72
+	var quad := QuadMesh.new()
+	quad.size = Vector2(span, span)
+	flash.mesh = quad
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.albedo_texture = _flash_tex(_laser_muzzle())
+	mat.albedo_color = Color.WHITE
+	flash.material_override = mat
+	_gun_mount.add_child(flash)
+	flash.top_level = true
+	flash.visible = false
+	var light := OmniLight3D.new()
+	light.light_energy = 0.0
+	light.omni_range = 1.6
+	light.shadow_enabled = false
+	light.light_color = Color(0.45, 0.35, 1.0) if _laser_muzzle() else Color(1.0, 0.65, 0.2)
+	flash.add_child(light)
+	_muzzle_flashes.append(flash)
+
+func _pop_muzzle(side: int) -> void:
+	if _muzzle_flashes.is_empty():
+		return
+	var idx := _muzzle_index(side)
+	if idx >= _muzzle_flashes.size():
+		idx = 0
+	var flash := _muzzle_flashes[idx]
+	if flash == null or not is_instance_valid(flash):
+		return
+	flash.global_position = _barrel_tip(side)
+	flash.scale = Vector3.ONE * randf_range(0.9, 1.25)
+	flash.rotate_object_local(Vector3.FORWARD, randf() * TAU)
+	flash.visible = true
+	if flash.get_child_count() > 0:
+		var light := flash.get_child(0) as OmniLight3D
+		if light:
+			light.light_energy = 2.6 if _laser_muzzle() else 1.9
+	var gap := 0.07 if _uses_burst() else 1.0 / maxf(_shots_per_second(), 1.0)
+	_muzzle_time = clampf(gap * 0.55, 0.03, 0.055)
+
+func _tick_muzzle(delta: float) -> void:
+	if _muzzle_time <= 0.0:
+		return
+	_muzzle_time -= delta
+	if _muzzle_time > 0.0:
+		return
+	for flash in _muzzle_flashes:
+		if flash == null or not is_instance_valid(flash):
+			continue
+		flash.visible = false
+		if flash.get_child_count() > 0:
+			var light := flash.get_child(0) as OmniLight3D
+			if light:
+				light.light_energy = 0.0
+
+func _spawn_tracer(_dir: Vector3, impact: Vector3, hand_bias: float = 0.0) -> void:
+	var side := 0
+	if _akimbo():
+		side = 1 if hand_bias > 0.0 else 0
+	var start := _barrel_tip(side)
+	var delta := impact - start
+	var dist := delta.length()
+	if dist < 0.25:
+		return
+	var laser := _laser_muzzle()
+	var streak := MeshInstance3D.new()
+	var box := BoxMesh.new()
+	var thick := 0.022 if laser else 0.008
+	if weapon_id == "debt_shotgun" and not laser:
+		thick = 0.005
+	box.size = Vector3(thick, thick, dist)
+	streak.mesh = box
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.albedo_color = Color(0.55, 0.45, 1.0, 0.95) if laser else Color(1.0, 0.62, 0.12, 0.9)
+	streak.material_override = mat
+	var host := get_tree().current_scene
+	if host == null:
+		host = self
+	host.add_child(streak)
+	streak.global_position = start + delta * 0.5
+	if delta.length_squared() > 0.0001:
+		streak.look_at(impact, camera.global_transform.basis.y)
+	var life := 0.12 if laser else 0.07
+	var tw := create_tween()
+	tw.tween_property(mat, "albedo_color:a", 0.0, life)
+	tw.tween_callback(streak.queue_free)
+
+func _ads_fov() -> float:
+	if weapon_id in ["debt_shotgun", "rent_rifle", "ledger_cannon"]:
+		return ADS_FOV_LONG
+	return ADS_FOV
+
 func _arm_rig() -> Dictionary:
-	if weapon_id in ["street_smg", "debt_shotgun", "rent_rifle"]:
+	if weapon_id in ["debt_shotgun", "rent_rifle", "ledger_cannon"] or (weapon_id == "street_smg" and weapon_tier >= 2):
 		return {"path": "res://assets/weapons/fps_rifle.glb", "scale": 0.08, "yaw": 90.0, "pos": Vector3(-0.35, -0.2, -0.43)}
 	return {"path": "res://assets/weapons/fps_pistol.glb", "scale": 0.09, "yaw": 90.0, "pos": Vector3(-0.35, -0.23, -0.20)}
 
@@ -781,6 +1275,10 @@ func _build_viewmodel() -> void:
 func _show_gun() -> void:
 	if _gun_mount == null:
 		return
+	_muzzle_flashes.clear()
+	_muzzle_guns.clear()
+	_muzzle_time = 0.0
+	_nozzle = 0
 	for child in _gun_mount.get_children():
 		child.free()
 	_view_anims.clear()
@@ -793,8 +1291,8 @@ func _show_gun() -> void:
 		push_error("Missing arm rig " + str(arms.path))
 		return
 	if _akimbo():
-		_spawn_arm(rig_packed, arms, 0.18, false)
-		_spawn_arm(rig_packed, arms, 0.18, true)
+		_spawn_arm(rig_packed, arms, 0.14, false)
+		_spawn_arm(rig_packed, arms, 0.14, true)
 	else:
 		_spawn_arm(rig_packed, arms, 0.0, false)
 	_hold_idle()
@@ -812,18 +1310,36 @@ func _spawn_arm(packed: PackedScene, arms: Dictionary, spread: float, mirror: bo
 	rig.position = pos
 	pivot.add_child(rig)
 	_color_viewmodel(rig)
-	if weapon_id == "pop_junk":
-		_seat_held(rig, "res://assets/weapons/ray_gun.glb", Vector3(0.0, 0.0, -1.0), 2.96, 0.28, "glock")
-	elif weapon_id == "pipe_pistol" and weapon_tier >= 2:
-		_seat_held(rig, "res://assets/weapons/pistol_v2.glb", Vector3(1.0, 0.0, 0.0), 2.11, 0.36, "glock")
+	if weapon_id == "ledger_cannon":
+		_seat_held(rig, "res://assets/weapons/ledger_cannon.glb", Vector3(-1, 0, 0), Vector3(0, 1, 0), 1.15, "akm", 0.34, true, 0.7, false, false)
+	elif weapon_id == "pop_junk":
+		_seat_held(rig, "res://assets/weapons/ray_gun.glb", Vector3(0, 0, -1), Vector3(0, 1, 0), 0.52, "glock")
+	elif weapon_id == "pipe_pistol" and weapon_tier >= 3:
+		_seat_held(rig, "res://assets/weapons/pistol_v3.glb", Vector3(0, 0, -1), Vector3(0, 1, 0), 0.56, "glock")
+	elif weapon_id == "pipe_pistol" and weapon_tier == 2:
+		_seat_held(rig, "res://assets/weapons/pistol_v2.glb", Vector3(1, 0, 0), Vector3(0, 1, 0), 0.52, "glock")
+	elif weapon_id == "street_smg" and weapon_tier >= 3:
+		_seat_held(rig, "res://assets/weapons/smg_v3.glb", Vector3(1, 0, 0), Vector3(0, 1, 0), 0.95, "akm", 0.3, true, 0.25, false, true, 0.04)
+	elif weapon_id == "street_smg" and weapon_tier == 2:
+		_seat_held(rig, "res://assets/weapons/smg.glb", Vector3(1, 0, 0), Vector3(0, 1, 0), 0.55, "akm", 0.34, true, 0.0, true, false, 0.0, 0.03)
 	elif weapon_id == "street_smg":
-		_seat_held(rig, "res://assets/weapons/smg.glb", Vector3(1.0, 0.0, 0.0), 2.11, 0.48, "akm")
+		_seat_held(rig, "res://assets/weapons/smg_v1.glb", Vector3(1, 0, 0), Vector3(0, 1, 0), 0.54, "glock", 0.28, true, 0.0)
+	elif weapon_id == "debt_shotgun" and weapon_tier >= 3:
+		_seat_held(rig, "res://assets/weapons/shotgun_v3.glb", Vector3(1, 0, 0), Vector3(0, 1, 0), 1.25, "akm", 0.32, true, 0.0)
+	elif weapon_id == "debt_shotgun" and weapon_tier == 2:
+		_seat_held(rig, "res://assets/weapons/shotgun_v2.glb", Vector3(1, 0, 0), Vector3(0, 1, 0), 1.05, "akm", 0.3, true, 0.7)
 	elif weapon_id == "debt_shotgun":
-		_seat_held(rig, "res://assets/weapons/mossberg.glb", Vector3(1.0, 0.0, 0.0), 6.03, 1.05, "akm")
+		_seat_held(rig, "res://assets/weapons/mossberg.glb", Vector3(1, 0, 0), Vector3(0, 1, 0), 1.35, "akm", 0.3, true, 0.0)
+	elif weapon_id == "rent_rifle" and weapon_tier >= 3:
+		_seat_held(rig, "res://assets/weapons/rifle_v3.glb", Vector3(1, 0, 0), Vector3(0, 1, 0), 1.15, "akm", 0.34, true, 0.7)
 	elif weapon_id == "rent_rifle" and weapon_tier < 2:
-		_seat_held(rig, "res://assets/weapons/rifle.glb", Vector3(0.0, 0.0, 1.0), 4.76, 0.78, "akm")
+		_seat_held(rig, "res://assets/weapons/rifle.glb", Vector3(0, 0, -1), Vector3(0, 1, 0), 1.15, "akm", 0.34, true, 0.25)
 	if _akimbo():
 		_collapse_support_hand(rig)
+	elif weapon_id == "street_smg" and weapon_tier == 2:
+		_pull_support_hand(rig, true)
+	pivot.position.x = _aim_nudge()
+	_register_muzzle(rig)
 	var bucket := _offhand_anims if mirror else _view_anims
 	for anim in rig.find_children("*", "AnimationPlayer", true, false):
 		bucket.append(anim as AnimationPlayer)
@@ -836,7 +1352,35 @@ func _collapse_support_hand(rig: Node3D) -> void:
 		var modifier := preload("res://scripts/collapse_left_arm.gd").new() as SkeletonModifier3D
 		skeleton.add_child(modifier)
 
-func _seat_held(rig: Node3D, path: String, model_axis: Vector3, model_length: float, world_length: float, hide_name: String) -> void:
+func _aim_nudge() -> float:
+	if weapon_id == "pipe_pistol" and weapon_tier >= 3:
+		return 0.0
+	if weapon_id == "pipe_pistol" and weapon_tier == 2:
+		return -0.214
+	if weapon_id == "pipe_pistol":
+		return -0.211
+	if weapon_id == "street_smg" and weapon_tier < 2:
+		return -0.214
+	if weapon_id == "debt_shotgun" and weapon_tier == 2:
+		return 0.048
+	if weapon_id == "rent_rifle" and weapon_tier >= 3:
+		return 0.049
+	if weapon_id == "pop_junk":
+		return -0.216
+	if weapon_id == "ledger_cannon":
+		return 0.034
+	return 0.0
+
+func _pull_support_hand(rig: Node3D, onto_barrel: bool) -> void:
+	for node in rig.find_children("*", "Skeleton3D", true, false):
+		var skeleton := node as Skeleton3D
+		if skeleton.find_bone("Hand.L") < 0:
+			continue
+		var modifier := preload("res://scripts/ads_support_hand.gd").new()
+		modifier.aim_onto_barrel = onto_barrel
+		skeleton.add_child(modifier)
+
+func _seat_held(rig: Node3D, path: String, model_fwd: Vector3, model_up: Vector3, world_length: float, hide_name: String, grip_t: float = 0.22, plant_hand: bool = false, nudge_support: float = 0.0, use_bolt: bool = false, auto_flip: bool = true, grip_lift: float = 0.0, side_shift: float = 0.0) -> void:
 	for node in rig.find_children("*", "MeshInstance3D", true, false):
 		if hide_name != "" and hide_name in String(node.name).to_lower():
 			(node as MeshInstance3D).visible = false
@@ -851,57 +1395,155 @@ func _seat_held(rig: Node3D, path: String, model_axis: Vector3, model_length: fl
 	var packed := load(path) as PackedScene
 	if packed == null:
 		return
-	_attach_pistol(skeleton, "Root", packed, model_axis, model_length, world_length)
+	_attach_held(skeleton, packed, model_fwd, model_up, world_length, grip_t, plant_hand, nudge_support, use_bolt, auto_flip, grip_lift, side_shift)
 
-func _attach_pistol(skeleton: Skeleton3D, bone_name: String, packed: PackedScene, model_axis: Vector3, model_length: float, world_length: float) -> void:
-	var bone := skeleton.find_bone(bone_name)
+func _attach_held(skeleton: Skeleton3D, packed: PackedScene, model_fwd: Vector3, model_up: Vector3, world_length: float, grip_t: float = 0.22, plant_hand: bool = false, nudge_support: float = 0.0, use_bolt: bool = false, auto_flip: bool = true, grip_lift: float = 0.0, side_shift: float = 0.0) -> void:
+	var bone := skeleton.find_bone("Root")
 	if bone < 0:
 		return
 	var attachment := BoneAttachment3D.new()
-	attachment.bone_name = bone_name
+	attachment.name = "HeldGun"
+	attachment.bone_name = "Root"
 	skeleton.add_child(attachment)
 	var gun := packed.instantiate() as Node3D
-	var bone_xf := skeleton.global_transform * skeleton.get_bone_global_pose(bone)
-	var aim := model_axis.normalized()
-	var aim_bone := skeleton.find_bone("Barrel")
-	if aim_bone < 0:
-		aim_bone = skeleton.find_bone("Bolt")
-	if aim_bone >= 0:
-		var barrel_xf := skeleton.global_transform * skeleton.get_bone_global_pose(aim_bone)
-		var local_aim: Vector3 = bone_xf.basis.inverse() * (barrel_xf.origin - bone_xf.origin)
-		if local_aim.length() > 0.001:
-			aim = local_aim.normalized()
-	var bone_scale := bone_xf.basis.x.length()
-	gun.scale = Vector3.ONE * (world_length / model_length / maxf(bone_scale, 0.001))
-	if model_axis.normalized().dot(aim) < 0.999:
-		gun.quaternion = Quaternion(model_axis.normalized(), aim)
 	attachment.add_child(gun)
-	_plant_grip(gun, attachment)
+	gun.transform = Transform3D.IDENTITY
+	var bone_xf := skeleton.global_transform * skeleton.get_bone_global_pose(bone)
+	var bone_basis := bone_xf.basis.orthonormalized()
+	var world_fwd := -camera.global_transform.basis.z
+	if use_bolt:
+		var aim_bone := skeleton.find_bone("Barrel")
+		if aim_bone < 0:
+			aim_bone = skeleton.find_bone("Bolt")
+		if aim_bone >= 0:
+			var barrel_xf := skeleton.global_transform * skeleton.get_bone_global_pose(aim_bone)
+			var along := barrel_xf.origin - bone_xf.origin
+			if along.length() > 0.001:
+				world_fwd = along.normalized()
+	var local_fwd: Vector3 = (bone_basis.inverse() * world_fwd).normalized()
+	var local_up: Vector3 = (bone_basis.inverse() * Vector3.UP).normalized()
+	gun.quaternion = _map_axes(model_fwd.normalized(), model_up.normalized(), local_fwd, local_up)
+	var box := _visual_aabb(gun)
+	var current := maxf(box.size.x, maxf(box.size.y, box.size.z))
+	if current > 0.0001:
+		gun.scale *= world_length / current
+	box = _visual_aabb(gun)
+	var half := absf(world_fwd.x) * box.size.x + absf(world_fwd.y) * box.size.y + absf(world_fwd.z) * box.size.z
+	var rear: Vector3 = box.get_center() - world_fwd * (half * 0.5)
+	var grip: Vector3 = _held_grip(gun, rear, world_fwd, world_length, grip_t)
+	if auto_flip and grip.distance_squared_to(_aabb_support(box, world_fwd)) < grip.distance_squared_to(_aabb_support(box, -world_fwd)):
+		gun.quaternion = _map_axes(-model_fwd.normalized(), model_up.normalized(), local_fwd, local_up)
+		box = _visual_aabb(gun)
+		half = absf(world_fwd.x) * box.size.x + absf(world_fwd.y) * box.size.y + absf(world_fwd.z) * box.size.z
+		rear = box.get_center() - world_fwd * (half * 0.5)
+	var plant := attachment.global_position
+	if plant_hand:
+		var hand_r := skeleton.find_bone("Hand.R.001")
+		if hand_r >= 0:
+			var right_pos: Vector3 = (skeleton.global_transform * skeleton.get_bone_global_pose(hand_r)).origin
+			plant += world_fwd * world_fwd.dot(right_pos - plant)
+	gun.global_position += plant - _held_grip(gun, rear, world_fwd, world_length, grip_t)
+	if nudge_support > 0.0:
+		var hand_l := skeleton.find_bone("Hand.L")
+		if hand_l >= 0:
+			var left_pos: Vector3 = (skeleton.global_transform * skeleton.get_bone_global_pose(hand_l)).origin
+			var on_barrel: Vector3 = plant + world_fwd * world_fwd.dot(left_pos - plant)
+			gun.global_position += (left_pos - on_barrel) * nudge_support
+	if grip_lift != 0.0:
+		gun.global_position -= camera.global_transform.basis.y * grip_lift
+	if side_shift != 0.0:
+		gun.global_position += camera.global_transform.basis.x * side_shift
 	_color_viewmodel(gun)
 
-func _plant_grip(gun: Node3D, attachment: Node3D) -> void:
-	var skeleton: Skeleton3D = null
+func _aabb_support(box: AABB, dir: Vector3) -> Vector3:
+	var point := box.position
+	if dir.x > 0.0:
+		point.x += box.size.x
+	if dir.y > 0.0:
+		point.y += box.size.y
+	if dir.z > 0.0:
+		point.z += box.size.z
+	return point
+
+func _held_grip(gun: Node3D, rear: Vector3, world_fwd: Vector3, world_length: float, grip_t: float) -> Vector3:
 	for node in gun.find_children("*", "Skeleton3D", true, false):
 		var candidate := node as Skeleton3D
-		if candidate.find_bone("Root") >= 0:
-			skeleton = candidate
-			break
-	if skeleton == null:
-		return
-	var grip: Vector3 = skeleton.global_transform * skeleton.get_bone_global_pose(skeleton.find_bone("Root")).origin
-	gun.global_position += attachment.global_position - grip
+		var grip := candidate.find_bone("Root")
+		if grip >= 0:
+			return (candidate.global_transform * candidate.get_bone_global_pose(grip)).origin
+	return rear + world_fwd * world_length * grip_t
+
+func _map_axes(from_fwd: Vector3, from_up: Vector3, to_fwd: Vector3, to_up: Vector3) -> Quaternion:
+	return (_axis_basis(to_fwd, to_up) * _axis_basis(from_fwd, from_up).inverse()).get_rotation_quaternion()
+
+func _axis_basis(fwd: Vector3, up: Vector3) -> Basis:
+	var f := fwd.normalized()
+	var r := up.normalized().cross(f)
+	if r.length_squared() < 0.0001:
+		r = Vector3.UP.cross(f)
+	if r.length_squared() < 0.0001:
+		r = Vector3.RIGHT.cross(f)
+	r = r.normalized()
+	var u := f.cross(r).normalized()
+	return Basis(r, u, f)
+
+func _visual_aabb(node: Node3D) -> AABB:
+	var box := AABB()
+	var any := false
+	var meshes: Array[Node] = node.find_children("*", "MeshInstance3D", true, false)
+	if node is MeshInstance3D:
+		meshes.insert(0, node)
+	for mesh_node in meshes:
+		var mesh_inst := mesh_node as MeshInstance3D
+		if mesh_inst.mesh == null or not mesh_inst.visible or String(mesh_inst.name) == "MuzzleFlash":
+			continue
+		var local := mesh_inst.get_aabb()
+		var xf := mesh_inst.global_transform
+		for i in 8:
+			var corner := Vector3(
+				local.position.x + local.size.x * float(i & 1),
+				local.position.y + local.size.y * float((i >> 1) & 1),
+				local.position.z + local.size.z * float((i >> 2) & 1)
+			)
+			var point := xf * corner
+			if not any:
+				box = AABB(point, Vector3.ZERO)
+				any = true
+			else:
+				box = box.expand(point)
+	return box
 
 func _hold_idle() -> void:
-	if _reload > 0.0 or _burst_left > 0:
+	if _burst_left > 0:
 		return
-	for anim in _all_view_anims():
-		if anim.is_playing():
-			continue
-		var idle := _view_clip(anim, "idle")
-		if idle != "":
-			anim.play(idle)
+	if not _akimbo():
+		if _reload > 0.0:
+			return
+		for anim in _all_view_anims():
+			if anim.is_playing():
+				continue
+			var idle := _view_clip(anim, "idle")
+			if idle != "":
+				anim.play(idle)
+		return
+	if _reload <= 0.0:
+		for anim in _offhand_anims:
+			if anim.is_playing():
+				continue
+			var idle := _view_clip(anim, "idle")
+			if idle != "":
+				anim.play(idle)
+	if _off_reload <= 0.0:
+		for anim in _view_anims:
+			if anim.is_playing():
+				continue
+			var idle := _view_clip(anim, "idle")
+			if idle != "":
+				anim.play(idle)
 
 func _color_viewmodel(node: Node) -> void:
+	if String(node.name) == "MuzzleFlash":
+		return
 	for child in node.get_children():
 		_color_viewmodel(child)
 	if not node is MeshInstance3D:

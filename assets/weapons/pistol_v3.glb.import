@@ -3,13 +3,13 @@
 importer="scene"
 importer_version=1
 type="PackedScene"
-uid="uid://c1wwku5qk45f1"
-path="res://.godot/imported/dreads.glb-5936002b777ff0ab3778c7b52e11e31d.scn"
+uid="uid://bsm1a14a7h4ul"
+path="res://.godot/imported/pistol_v3.glb-2e303c0a6485d688ab3398f55620e0a4.scn"
 
 [deps]
 
-source_file="res://assets/characters/dreads.glb"
-dest_files=["res://.godot/imported/dreads.glb-5936002b777ff0ab3778c7b52e11e31d.scn"]
+source_file="res://assets/weapons/pistol_v3.glb"
+dest_files=["res://.godot/imported/pistol_v3.glb-2e303c0a6485d688ab3398f55620e0a4.scn"]
 
 [params]
 

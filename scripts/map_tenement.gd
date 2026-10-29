@@ -83,7 +83,7 @@ func _door(pos: Vector3, outside: Vector3) -> void:
 	var door := StaticBody3D.new()
 	door.set_script(load("res://scripts/barricade.gd"))
 	door.position = pos
-	door.boards = 4
+	door.boards = 6
 	add_child(door)
 	door.set_outside(outside)
 
@@ -119,6 +119,8 @@ func _stations() -> void:
 	_station("crate", Vector3(4.2, 0, -2), "", "", 0)
 	_station("markup", Vector3(4.2, 0, 0.6), "", "", 0)
 	_station("smith", Vector3(4.2, 0, 3.2), "", "", 0)
+	_station("wall", Vector3(8.4, 0, -2), "pop_junk", "", -90)
+	_station("wall", Vector3(8.4, 0, 1.5), "ledger_cannon", "", -90)
 
 func _cast_lineup() -> void:
 	var row := Node3D.new()

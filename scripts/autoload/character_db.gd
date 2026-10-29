@@ -2,26 +2,26 @@ extends Node
 
 const CAST := {
 	"punk": {
-		"name": "Rico \"Static\" Vargas",
+		"name": "Male Punk",
 		"color": Color(0.86, 0.22, 0.24),
 		"ult": "Feedback Loop",
 		"ult_hint": "Fire rate and speed, then a painful crash.",
 	},
-	"hobo": {
-		"name": "Walt \"Ledger\" Boone",
+	"cowboy": {
+		"name": "Cowboy",
 		"color": Color(0.62, 0.46, 0.28),
 		"ult": "Market Crash",
 		"ult_hint": "Slow the horde. Marked kills pay extra.",
 	},
-	"dreads": {
-		"name": "Nia \"Haze\" Coleman",
-		"color": Color(0.25, 0.62, 0.38),
+	"punk_f": {
+		"name": "Female Punk",
+		"color": Color(0.72, 0.28, 0.62),
 		"ult": "Cloud Cover",
 		"ult_hint": "A smoke cloud that softens incoming hits.",
 	},
-	"lazy": {
-		"name": "Kenji \"Nap-Time\" Okada",
-		"color": Color(0.28, 0.42, 0.78),
+	"worker": {
+		"name": "Construction Worker",
+		"color": Color(0.85, 0.62, 0.18),
 		"ult": "Power Nap",
 		"ult_hint": "A short nap, then a wake-up shove.",
 	},

@@ -6,7 +6,7 @@ const WEAPONS := {
 	"debt_shotgun": {"name": "Debt Collector", "damage": 8.0, "rate": 1.05, "mag": 6, "reserve": 36, "pellets": 7, "spread": 0.09, "price": 1400, "rank": 3},
 	"rent_rifle": {"name": "Rent Rifle", "damage": 30.0, "rate": 3.4, "mag": 24, "reserve": 144, "pellets": 1, "spread": 0.008, "price": 1800, "rank": 4},
 	"pop_junk": {"name": "Laser Pistol", "damage": 5.0, "rate": 6.0, "mag": 12, "reserve": 36, "pellets": 1, "spread": 0.06, "price": 200, "rank": 1},
-	"ledger_cannon": {"name": "Ledger Cannon", "damage": 72.0, "rate": 0.7, "mag": 4, "reserve": 20, "pellets": 1, "spread": 0.004, "price": 0, "rank": 5},
+	"ledger_cannon": {"name": "Ledger Cannon", "damage": 72.0, "rate": 0.7, "mag": 3, "reserve": 30, "pellets": 1, "spread": 0.004, "price": 2400, "rank": 5},
 }
 
 const PERKS := {
@@ -66,6 +66,10 @@ func markup_cost(_weapon_id: String, next_tier: int) -> int:
 func smith_cost(level_after: int) -> int:
 	return 750 * level_after
 
+func board_payout() -> int:
+	var wave := maxi(GameState.round_index, 1)
+	return mini(10 + ((wave - 1) / 5) * 2, 20)
+
 func roll_crate() -> String:
 	var total := 0
 	for row in CRATE_TABLE:
@@ -79,4 +83,4 @@ func roll_crate() -> String:
 	return "pipe_pistol"
 
 func wall_weapons() -> Array[String]:
-	return ["street_smg", "debt_shotgun", "rent_rifle"]
+	return ["street_smg", "debt_shotgun", "rent_rifle", "pop_junk", "ledger_cannon"]

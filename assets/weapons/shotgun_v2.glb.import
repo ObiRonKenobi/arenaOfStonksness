@@ -3,13 +3,13 @@
 importer="scene"
 importer_version=1
 type="PackedScene"
-uid="uid://bnn3oebbfqahg"
-path="res://.godot/imported/collector.glb-8f1685c2ec4e85a7878b6670d1a443fe.scn"
+uid="uid://dco8p62b4bdmc"
+path="res://.godot/imported/shotgun_v2.glb-58d4dfa2a414028d3e91a0616490d628.scn"
 
 [deps]
 
-source_file="res://assets/characters/collector.glb"
-dest_files=["res://.godot/imported/collector.glb-8f1685c2ec4e85a7878b6670d1a443fe.scn"]
+source_file="res://assets/weapons/shotgun_v2.glb"
+dest_files=["res://.godot/imported/shotgun_v2.glb-58d4dfa2a414028d3e91a0616490d628.scn"]
 
 [params]
 

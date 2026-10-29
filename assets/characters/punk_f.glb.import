@@ -3,13 +3,13 @@
 importer="scene"
 importer_version=1
 type="PackedScene"
-uid="uid://cwv4gxx4yu6ja"
-path="res://.godot/imported/hobo.glb-b4b8ad5376cce3519428e7e03eebb83f.scn"
+uid="uid://bdw2f7mk60lav"
+path="res://.godot/imported/punk_f.glb-bc2e4dafe96352bf29331090f608c353.scn"
 
 [deps]
 
-source_file="res://assets/characters/hobo.glb"
-dest_files=["res://.godot/imported/hobo.glb-b4b8ad5376cce3519428e7e03eebb83f.scn"]
+source_file="res://assets/characters/punk_f.glb"
+dest_files=["res://.godot/imported/punk_f.glb-bc2e4dafe96352bf29331090f608c353.scn"]
 
 [params]
 

@@ -2,7 +2,7 @@ extends StaticBody3D
 
 const PLANKS := preload("res://assets/textures/planks.png")
 
-var boards := 4
+var boards := 6
 var max_boards := 6
 var sill_top := 1.05
 var _outside := Vector3.ZERO
@@ -45,16 +45,13 @@ func set_outside(offset: Vector3) -> void:
 
 func board(player: Node) -> void:
 	if boards >= max_boards:
-		GameState.toast("This opening is fully boarded.")
 		return
-	var left := int(player.get("planks"))
-	if left <= 0:
-		GameState.toast("You need planks.")
-		return
-	player.set("planks", left - 1)
 	boards += 1
 	_rebuild()
-	GameState.toast("Boarded. Planks left: %d" % int(player.get("planks")))
+	var pay := Economy.board_payout()
+	if player.has_method("add_cash"):
+		player.call("add_cash", pay)
+	GameState.toast("+$%d" % pay)
 
 func chip(_amount: int = 1) -> void:
 	if boards <= 0:
@@ -62,10 +59,10 @@ func chip(_amount: int = 1) -> void:
 	boards -= 1
 	_rebuild()
 
-func prompt_for(player: Node) -> String:
+func prompt_for(_player: Node) -> String:
 	if boards >= max_boards:
-		return "Fully boarded"
-	return "E  Board up  (%d planks)" % int(player.get("planks"))
+		return "Window is fully boarded"
+	return "Hold E  Board up  +$%d  (%d/%d)" % [Economy.board_payout(), boards, max_boards]
 
 func _rebuild() -> void:
 	for child in get_children():
