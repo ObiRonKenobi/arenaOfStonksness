@@ -1262,7 +1262,7 @@ func _ads_fov() -> float:
 	return ADS_FOV
 
 func _arm_rig() -> Dictionary:
-	if weapon_id in ["debt_shotgun", "rent_rifle", "ledger_cannon"] or (weapon_id == "street_smg" and weapon_tier >= 2):
+	if weapon_id in ["debt_shotgun", "rent_rifle", "ledger_cannon"] or (weapon_id == "street_smg" and weapon_tier >= 3):
 		return {"path": "res://assets/weapons/fps_rifle.glb", "scale": 0.08, "yaw": 90.0, "pos": Vector3(-0.35, -0.2, -0.43)}
 	return {"path": "res://assets/weapons/fps_pistol.glb", "scale": 0.09, "yaw": 90.0, "pos": Vector3(-0.35, -0.23, -0.20)}
 
@@ -1321,9 +1321,9 @@ func _spawn_arm(packed: PackedScene, arms: Dictionary, spread: float, mirror: bo
 	elif weapon_id == "street_smg" and weapon_tier >= 3:
 		_seat_held(rig, "res://assets/weapons/smg_v3.glb", Vector3(1, 0, 0), Vector3(0, 1, 0), 0.95, "akm", 0.3, true, 0.25, false, true, 0.04)
 	elif weapon_id == "street_smg" and weapon_tier == 2:
-		_seat_held(rig, "res://assets/weapons/smg.glb", Vector3(1, 0, 0), Vector3(0, 1, 0), 0.55, "akm", 0.34, true, 0.0, true, false, 0.0, 0.03)
+		_seat_held(rig, "res://assets/weapons/smg.glb", Vector3(1, 0, 0), Vector3(0, 1, 0), 0.55, "glock", 0.34, true, 0.0, true, false, -0.035, 0.03)
 	elif weapon_id == "street_smg":
-		_seat_held(rig, "res://assets/weapons/smg_v1.glb", Vector3(1, 0, 0), Vector3(0, 1, 0), 0.54, "glock", 0.28, true, 0.0)
+		_seat_held(rig, "res://assets/weapons/smg_v1.glb", Vector3(1, 0, 0), Vector3(0, 1, 0), 0.54, "glock", 0.28, true, 0.0, false, true, 0.0, 0.0, 0.08)
 	elif weapon_id == "debt_shotgun" and weapon_tier >= 3:
 		_seat_held(rig, "res://assets/weapons/shotgun_v3.glb", Vector3(1, 0, 0), Vector3(0, 1, 0), 1.25, "akm", 0.32, true, 0.0)
 	elif weapon_id == "debt_shotgun" and weapon_tier == 2:
@@ -1331,18 +1331,44 @@ func _spawn_arm(packed: PackedScene, arms: Dictionary, spread: float, mirror: bo
 	elif weapon_id == "debt_shotgun":
 		_seat_held(rig, "res://assets/weapons/mossberg.glb", Vector3(1, 0, 0), Vector3(0, 1, 0), 1.35, "akm", 0.3, true, 0.0)
 	elif weapon_id == "rent_rifle" and weapon_tier >= 3:
-		_seat_held(rig, "res://assets/weapons/rifle_v3.glb", Vector3(1, 0, 0), Vector3(0, 1, 0), 1.15, "akm", 0.34, true, 0.7)
+		_seat_held(rig, "res://assets/weapons/rifle_v3.glb", Vector3(1, 0, 0), Vector3(0, 1, 0), 1.15, "akm", 0.34, true, 0.7, false, false)
 	elif weapon_id == "rent_rifle" and weapon_tier < 2:
 		_seat_held(rig, "res://assets/weapons/rifle.glb", Vector3(0, 0, -1), Vector3(0, 1, 0), 1.15, "akm", 0.34, true, 0.25)
 	if _akimbo():
 		_collapse_support_hand(rig)
-	elif weapon_id == "street_smg" and weapon_tier == 2:
-		_pull_support_hand(rig, true)
 	pivot.position.x = _aim_nudge()
 	_register_muzzle(rig)
+	if weapon_id == "street_smg" and weapon_tier == 2:
+		_point_barrel_at_crosshair(rig)
 	var bucket := _offhand_anims if mirror else _view_anims
 	for anim in rig.find_children("*", "AnimationPlayer", true, false):
 		bucket.append(anim as AnimationPlayer)
+
+func _point_barrel_at_crosshair(rig: Node3D) -> void:
+	var gun := rig.find_child("HeldGun", true, false) as Node3D
+	if gun == null or gun.get_child_count() == 0:
+		return
+	var model := gun.get_child(0) as Node3D
+	var skeleton := gun.get_parent() as Skeleton3D
+	if model == null or skeleton == null:
+		return
+	var hand := skeleton.find_bone("Hand.R.001")
+	if hand < 0:
+		return
+	var pivot := (skeleton.global_transform * skeleton.get_bone_global_pose(hand)).origin
+	var xf := model.global_transform
+	var barrel := xf.basis.x.normalized()
+	var muzzle := _barrel_tip(0)
+	if muzzle.distance_squared_to(pivot) > 0.01 and barrel.dot(muzzle - pivot) < 0.0:
+		barrel = -barrel
+	var want := (camera.global_position - camera.global_transform.basis.z * 40.0 - pivot).normalized()
+	if barrel.dot(want) > 0.9995:
+		return
+	var rot := Quaternion(barrel, want)
+	var scale := xf.basis.get_scale()
+	var spun := Basis(rot) * xf.basis.orthonormalized()
+	var origin := pivot + rot * (xf.origin - pivot)
+	model.global_transform = Transform3D(spun.scaled(scale), origin)
 
 func _collapse_support_hand(rig: Node3D) -> void:
 	for node in rig.find_children("*", "Skeleton3D", true, false):
@@ -1359,28 +1385,21 @@ func _aim_nudge() -> float:
 		return -0.214
 	if weapon_id == "pipe_pistol":
 		return -0.211
+	if weapon_id == "street_smg" and weapon_tier == 2:
+		return -0.183
 	if weapon_id == "street_smg" and weapon_tier < 2:
 		return -0.214
 	if weapon_id == "debt_shotgun" and weapon_tier == 2:
 		return 0.048
 	if weapon_id == "rent_rifle" and weapon_tier >= 3:
-		return 0.049
+		return 0.1
 	if weapon_id == "pop_junk":
 		return -0.216
 	if weapon_id == "ledger_cannon":
 		return 0.034
 	return 0.0
 
-func _pull_support_hand(rig: Node3D, onto_barrel: bool) -> void:
-	for node in rig.find_children("*", "Skeleton3D", true, false):
-		var skeleton := node as Skeleton3D
-		if skeleton.find_bone("Hand.L") < 0:
-			continue
-		var modifier := preload("res://scripts/ads_support_hand.gd").new()
-		modifier.aim_onto_barrel = onto_barrel
-		skeleton.add_child(modifier)
-
-func _seat_held(rig: Node3D, path: String, model_fwd: Vector3, model_up: Vector3, world_length: float, hide_name: String, grip_t: float = 0.22, plant_hand: bool = false, nudge_support: float = 0.0, use_bolt: bool = false, auto_flip: bool = true, grip_lift: float = 0.0, side_shift: float = 0.0) -> void:
+func _seat_held(rig: Node3D, path: String, model_fwd: Vector3, model_up: Vector3, world_length: float, hide_name: String, grip_t: float = 0.22, plant_hand: bool = false, nudge_support: float = 0.0, use_bolt: bool = false, auto_flip: bool = true, grip_lift: float = 0.0, side_shift: float = 0.0, barrel_slide: float = 0.0) -> void:
 	for node in rig.find_children("*", "MeshInstance3D", true, false):
 		if hide_name != "" and hide_name in String(node.name).to_lower():
 			(node as MeshInstance3D).visible = false
@@ -1392,12 +1411,16 @@ func _seat_held(rig: Node3D, path: String, model_fwd: Vector3, model_up: Vector3
 			break
 	if skeleton == null:
 		return
+	for anim in rig.find_children("*", "AnimationPlayer", true, false):
+		(anim as AnimationPlayer).stop()
+	skeleton.reset_bone_poses()
+	skeleton.force_update_all_bone_transforms()
 	var packed := load(path) as PackedScene
 	if packed == null:
 		return
-	_attach_held(skeleton, packed, model_fwd, model_up, world_length, grip_t, plant_hand, nudge_support, use_bolt, auto_flip, grip_lift, side_shift)
+	_attach_held(skeleton, packed, model_fwd, model_up, world_length, grip_t, plant_hand, nudge_support, use_bolt, auto_flip, grip_lift, side_shift, barrel_slide)
 
-func _attach_held(skeleton: Skeleton3D, packed: PackedScene, model_fwd: Vector3, model_up: Vector3, world_length: float, grip_t: float = 0.22, plant_hand: bool = false, nudge_support: float = 0.0, use_bolt: bool = false, auto_flip: bool = true, grip_lift: float = 0.0, side_shift: float = 0.0) -> void:
+func _attach_held(skeleton: Skeleton3D, packed: PackedScene, model_fwd: Vector3, model_up: Vector3, world_length: float, grip_t: float = 0.22, plant_hand: bool = false, nudge_support: float = 0.0, use_bolt: bool = false, auto_flip: bool = true, grip_lift: float = 0.0, side_shift: float = 0.0, barrel_slide: float = 0.0) -> void:
 	var bone := skeleton.find_bone("Root")
 	if bone < 0:
 		return
@@ -1453,6 +1476,8 @@ func _attach_held(skeleton: Skeleton3D, packed: PackedScene, model_fwd: Vector3,
 		gun.global_position -= camera.global_transform.basis.y * grip_lift
 	if side_shift != 0.0:
 		gun.global_position += camera.global_transform.basis.x * side_shift
+	if barrel_slide != 0.0:
+		gun.global_position += world_fwd * barrel_slide
 	_color_viewmodel(gun)
 
 func _aabb_support(box: AABB, dir: Vector3) -> Vector3:
