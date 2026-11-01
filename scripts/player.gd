@@ -815,7 +815,7 @@ func _finish_reload(side: int = -1) -> void:
 
 func _interact() -> void:
 	var hit := _look_hit(2.6)
-	if hit != null and hit.is_in_group("stations"):
+	if hit != null and (hit.is_in_group("stations") or hit.is_in_group("gates")):
 		hit.call("use", self)
 
 func _tick_board(delta: float) -> void:
@@ -1321,7 +1321,7 @@ func _spawn_arm(packed: PackedScene, arms: Dictionary, spread: float, mirror: bo
 	elif weapon_id == "street_smg" and weapon_tier >= 3:
 		_seat_held(rig, "res://assets/weapons/smg_v3.glb", Vector3(1, 0, 0), Vector3(0, 1, 0), 0.95, "akm", 0.3, true, 0.25, false, true, 0.04)
 	elif weapon_id == "street_smg" and weapon_tier == 2:
-		_seat_held(rig, "res://assets/weapons/smg.glb", Vector3(1, 0, 0), Vector3(0, 1, 0), 0.55, "glock", 0.34, true, 0.0, true, false, -0.035, 0.03)
+		_seat_held(rig, "res://assets/weapons/smg.glb", Vector3(1, 0, 0), Vector3(0, 1, 0), 0.55, "glock", 0.34, true, 0.0, true, false, -0.055, 0.03)
 	elif weapon_id == "street_smg":
 		_seat_held(rig, "res://assets/weapons/smg_v1.glb", Vector3(1, 0, 0), Vector3(0, 1, 0), 0.54, "glock", 0.28, true, 0.0, false, true, 0.0, 0.0, 0.08)
 	elif weapon_id == "debt_shotgun" and weapon_tier >= 3:

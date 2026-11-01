@@ -28,7 +28,7 @@ func _upper_floor() -> void:
 	_box(Vector3(7.2, UPPER_Y, 5.9), Vector3(3.2, 0.25, 2.2), Color.WHITE, true, PLANKS)
 
 func _walls() -> void:
-	_box(Vector3(0, WALL_H * 0.5, 7), Vector3(18, WALL_H, 0.4), Color.WHITE, true, BRICK)
+	_south_rooms()
 	_box(Vector3(-9, WALL_H * 0.5, 0), Vector3(0.4, WALL_H, 14), Color.WHITE, true, BRICK)
 	_box(Vector3(9, WALL_H * 0.5, 0), Vector3(0.4, WALL_H, 14), Color.WHITE, true, BRICK)
 	_box(Vector3(0, WALL_H + 1.5, -7), Vector3(18, 3.0, 0.4), Color.WHITE, true, BRICK)
@@ -50,12 +50,40 @@ func _north_piers() -> void:
 func _window_frames() -> void:
 	var sill := Color(0.34, 0.31, 0.29)
 	var frame := Color(0.2, 0.14, 0.11)
-	var glass := Color(0.62, 0.78, 0.86, 0.35)
+	var glass := Color(1, 1, 1, 0)
 	for x in [-4.2, 0.0, 4.2]:
-		_box(Vector3(x, 0.525, -7), Vector3(1.78, 1.05, 0.42), sill, true)
-		_box(Vector3(x - 0.84, 1.72, -7), Vector3(0.1, 1.3, 0.46), frame, true)
-		_box(Vector3(x + 0.84, 1.72, -7), Vector3(0.1, 1.3, 0.46), frame, true)
-		_pane(Vector3(x, 1.75, -6.78), Vector3(1.5, 1.15, 0.04), glass, 0.0)
+		_box(Vector3(x, 0.525, -7), Vector3(1.78, 1.05, 0.4), sill, true)
+		_box(Vector3(x - 0.84, 1.72, -7), Vector3(0.1, 1.3, 0.4), frame, true)
+		_box(Vector3(x + 0.84, 1.72, -7), Vector3(0.1, 1.3, 0.4), frame, true)
+		_pane(Vector3(x, 1.75, -7.0), Vector3(1.5, 1.15, 0.04), glass, 0.0)
+
+func _south_rooms() -> void:
+	# Ground-floor south wall, split around doorways at x = -6, 0, and 6.
+	_box(Vector3(-7.85, 1.5, 7), Vector3(2.3, 3.0, 0.4), Color.WHITE, true, BRICK)
+	_box(Vector3(-3.0, 1.5, 7), Vector3(4.6, 3.0, 0.4), Color.WHITE, true, BRICK)
+	_box(Vector3(3.0, 1.5, 7), Vector3(4.6, 3.0, 0.4), Color.WHITE, true, BRICK)
+	_box(Vector3(7.85, 1.5, 7), Vector3(2.3, 3.0, 0.4), Color.WHITE, true, BRICK)
+	for x in [-6.0, 0.0, 6.0]:
+		_box(Vector3(x, 2.7, 7), Vector3(1.4, 0.6, 0.4), Color.WHITE, true, BRICK)
+	_box(Vector3(0, -0.15, 9.625), Vector3(18, 0.3, 5.55), Color.WHITE, true, PLANKS)
+	_box(Vector3(0, UPPER_Y, 9.6), Vector3(18.4, 0.25, 5.6), Color.WHITE, true, PLANKS)
+	_box(Vector3(-9, 1.5, 9.6), Vector3(0.4, 3.0, 5.6), Color.WHITE, true, BRICK)
+	_box(Vector3(9, 1.5, 9.6), Vector3(0.4, 3.0, 5.6), Color.WHITE, true, BRICK)
+	_box(Vector3(-3, 1.5, 9.6), Vector3(0.4, 3.0, 5.2), Color.WHITE, true, BRICK)
+	_box(Vector3(3, 1.5, 9.6), Vector3(0.4, 3.0, 5.2), Color.WHITE, true, BRICK)
+	_box(Vector3(0, 1.5, 12.2), Vector3(18.4, 3.0, 0.4), Color.WHITE, true, BRICK)
+	_gate("Street Smith", 400, Vector3(-6, 0, 7), -1.55)
+	_gate("The Markup", 800, Vector3(0, 0, 7), 1.55)
+	_gate("Black Market", 500, Vector3(6, 0, 7), 1.55)
+
+func _gate(room_name: String, price: int, pos: Vector3, slide: float) -> void:
+	var gate := StaticBody3D.new()
+	gate.set_script(load("res://scripts/gate.gd"))
+	gate.title = room_name
+	gate.price = price
+	gate.slide = slide
+	gate.position = pos
+	add_child(gate)
 
 func _doors() -> void:
 	_door(Vector3(-4.2, 1.05, -7), Vector3(0, 0, -2.2))
@@ -108,17 +136,17 @@ func _stairs() -> void:
 	_box(Vector3(7.2, UPPER_Y, 0.85), Vector3(2.6, 0.25, 0.7), Color.WHITE, true, PLANKS)
 
 func _stations() -> void:
-	_station("wall", Vector3(-6, 0, 6.2), "street_smg", "", 180)
+	_station("wall", Vector3(-7.85, 0, 6.2), "street_smg", "", 180)
 	_station("wall", Vector3(-3, 0, 6.2), "debt_shotgun", "", 180)
-	_station("wall", Vector3(0, 0, 6.2), "rent_rifle", "", 180)
+	_station("wall", Vector3(1.6, 0, 6.2), "rent_rifle", "", 180)
 	_station("perk", Vector3(3, 0, 6.2), "", "thick_skin", 180)
-	_station("perk", Vector3(6, 0, 6.2), "", "rapid_fire", 180)
+	_station("perk", Vector3(7.85, 0, 6.2), "", "rapid_fire", 180)
 	_station("perk", Vector3(-8.4, 0, -2), "", "tin_vest", 90)
 	_station("perk", Vector3(-8.4, 0, 1.5), "", "mean_streak", 90)
 	_station("planks", Vector3(-8.4, 0, 4), "", "", 90)
-	_station("crate", Vector3(4.2, 0, -2), "", "", 0)
-	_station("markup", Vector3(4.2, 0, 0.6), "", "", 0)
-	_station("smith", Vector3(4.2, 0, 3.2), "", "", 0)
+	_station("smith", Vector3(-6, 0, 11.6), "", "", 180)
+	_station("markup", Vector3(0, 0, 11.6), "", "", 180)
+	_station("crate", Vector3(6, 0, 11.6), "", "", 180)
 	_station("wall", Vector3(8.4, 0, -2), "pop_junk", "", -90)
 	_station("wall", Vector3(8.4, 0, 1.5), "ledger_cannon", "", -90)
 
@@ -149,6 +177,7 @@ func _pane(pos: Vector3, size: Vector3, color: Color, tilt: float) -> void:
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	mat.albedo_color = color
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	mesh.material_override = mat
 	add_child(mesh)

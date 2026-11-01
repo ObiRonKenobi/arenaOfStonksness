@@ -28,6 +28,7 @@ var _anim: AnimationPlayer
 var _clip := ""
 var _lock := 0.0
 var _swing_t := -1.0
+var _board_swing := false
 var _death_t := 0.0
 var _corpse_floor := 0.0
 var _wander_phase := 0.0
@@ -76,12 +77,17 @@ func _physics_process(delta: float) -> void:
 		var before := _swing_t
 		_swing_t += delta
 		if before < IMPACT and _swing_t >= IMPACT:
-			_land_hit(player)
+			if _board_swing:
+				_land_board()
+			else:
+				_land_hit(player)
+		var boarding := _board_swing
 		if _swing_t >= SWING:
 			_swing_t = -1.0
+			_board_swing = false
 		velocity.x = 0.0
 		velocity.z = 0.0
-		_sync_clip(false, true)
+		_sync_clip(false, not boarding)
 		if not is_on_floor():
 			velocity.y -= GRAVITY * delta
 		else:
@@ -128,8 +134,9 @@ func _physics_process(delta: float) -> void:
 	else:
 		velocity.x = 0.0
 		velocity.z = 0.0
-		_hit_door()
-	_sync_clip(velocity.length() > 0.2, attacking_door)
+		_face_boards()
+		_begin_swing(true)
+	_sync_clip(velocity.length() > 0.2, false)
 	if not is_on_floor():
 		velocity.y -= GRAVITY * delta
 	else:
@@ -281,19 +288,35 @@ func _climb_through_window(delta: float) -> void:
 	mesh_node.rotation = Vector3.ZERO
 	_sync_clip(true, false)
 
-func _hit_door() -> void:
-	if _cool > 0.0 or _door == null:
+func _face_boards() -> void:
+	if _door == null:
 		return
-	_cool = 0.7
-	_door.call("chip", 1)
+	var aim := _door.global_position
+	aim.y = global_position.y
+	if aim.distance_squared_to(global_position) > 0.0001:
+		look_at(aim, Vector3.UP)
 
-func _begin_swing() -> void:
+func _begin_swing(at_boards: bool = false) -> void:
 	if _cool > 0.0 or _swing_t >= 0.0:
 		return
+	_board_swing = at_boards
 	_swing_t = 0.0
-	_cool = SWING + 0.45
+	_cool = SWING if at_boards else SWING + 0.45
 	_sync_clip(false, true)
 	_lock = SWING
+
+func _land_board() -> void:
+	if not _at_boards():
+		return
+	_cool = 1.5
+	_door.call("chip", 1)
+
+func _at_boards() -> bool:
+	if _door == null or int(_door.get("boards")) <= 0:
+		return false
+	var flat := global_position - _window_approach()
+	flat.y = 0.0
+	return flat.length() < REACH
 
 func _land_hit(player: Node3D) -> void:
 	if player == null or not _in_strike(player):
