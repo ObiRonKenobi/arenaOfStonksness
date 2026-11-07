@@ -12,7 +12,7 @@ script = ExtResource("1_main")
 script = ExtResource("2_map")
 
 [node name="Player" parent="." instance=ExtResource("3_player")]
-transform = Transform3D(-1, 0, 0, 0, 1, 0, 0, 0, -1, 0, 0.1, 2)
+transform = Transform3D(-1, 0, 0, 0, 1, 0, 0, 0, -1, 0, 0, 4.8)
 
 [node name="HUD" type="CanvasLayer" parent="."]
 script = ExtResource("4_hud")

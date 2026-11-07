@@ -32,13 +32,27 @@ var _board_swing := false
 var _death_t := 0.0
 var _corpse_floor := 0.0
 var _wander_phase := 0.0
+var _steer_t := 0.0
+var _steer_side := 1.0
+var _steer_normal := Vector3.ZERO
+var _agent: NavigationAgent3D
+var _chase_at := Vector3(9999, 9999, 9999)
+var _chase_wait := 0.0
 
 func _ready() -> void:
 	add_to_group("enemies")
 	collision_layer = 2
 	collision_mask = 3
 	floor_snap_length = 0.45
+	floor_max_angle = deg_to_rad(50.0)
+	floor_constant_speed = true
 	_wander_phase = randf() * TAU
+	_agent = NavigationAgent3D.new()
+	_agent.radius = 0.35
+	_agent.height = 1.75
+	_agent.path_desired_distance = 0.45
+	_agent.target_desired_distance = 0.5
+	add_child(_agent)
 
 func setup(kind: String, health: float, move_speed: float, door: Node3D) -> void:
 	archetype = kind
@@ -63,6 +77,7 @@ func _physics_process(delta: float) -> void:
 		return
 	_cool = maxf(0.0, _cool - delta)
 	_lock = maxf(0.0, _lock - delta)
+	_steer_t = maxf(0.0, _steer_t - delta)
 	var player := get_tree().get_first_node_in_group("player") as Node3D
 	var slow := 1.0
 	if player and player.has_method("market_crash_active") and player.call("market_crash_active"):
@@ -102,21 +117,22 @@ func _physics_process(delta: float) -> void:
 		flat.y = 0.0
 		attacking_door = flat.length() < 1.15
 	elif player:
-		var upstairs := player.global_position.y > global_position.y + 1.2
-		if upstairs:
-			target = _stair_target()
-		else:
-			target = player.global_position
+		target = player.global_position
+		_refresh_chase(player, delta)
+		target = _agent.get_next_path_position()
 	if not attacking_door:
 		var dir := target - global_position
 		dir.y = 0.0
-		var climbing_stairs := _on_stair_climb()
 		if dir.length() > 0.15:
 			var dist := dir.length()
-			if climbing_stairs:
-				dir = dir.normalized()
-			else:
+			if player and not _door_fight():
+				dist = global_position.distance_to(player.global_position)
+			if _on_final_leg():
 				dir = _weave(dir.normalized(), delta, dist)
+			else:
+				dir = dir.normalized()
+			if _steer_t > 0.0 and _steer_normal.length() > 0.1:
+				dir = _slide_along(_steer_normal, dir)
 			if _yield_to_horde(dir, target):
 				velocity.x = 0.0
 				velocity.z = 0.0
@@ -124,12 +140,12 @@ func _physics_process(delta: float) -> void:
 				velocity.x = dir.x * speed * _slow
 				velocity.z = dir.z * speed * _slow
 			look_at(global_position + dir, Vector3.UP)
-			if player and target == player.global_position and _in_strike(player):
+			if player and not _door_fight() and _in_strike(player):
 				_begin_swing()
 		else:
 			velocity.x = 0.0
 			velocity.z = 0.0
-			if player and target == player.global_position and _in_strike(player):
+			if player and not _door_fight() and _in_strike(player):
 				_begin_swing()
 	else:
 		velocity.x = 0.0
@@ -142,9 +158,11 @@ func _physics_process(delta: float) -> void:
 	else:
 		velocity.y = -1.0
 	var step := Vector3(velocity.x, 0.0, velocity.z)
+	var before_pos := global_position
 	move_and_slide()
 	if step.length() > 0.2:
 		_step_up(step)
+		_note_bump(step, before_pos)
 
 func _weave(dir: Vector3, delta: float, dist: float) -> Vector3:
 	_wander_phase += delta * 1.35
@@ -159,7 +177,7 @@ func _yield_to_horde(dir: Vector3, target: Vector3) -> bool:
 	if dir.length() < 0.01:
 		return false
 	var heading := Vector3(dir.x, 0.0, dir.z).normalized()
-	var my_rank := global_position.distance_squared_to(target)
+	var my_rank := _rank_to(target)
 	for other in get_tree().get_nodes_in_group("enemies"):
 		var body := other as CharacterBody3D
 		if body == null or body == self or body._dead:
@@ -171,7 +189,7 @@ func _yield_to_horde(dir: Vector3, target: Vector3) -> bool:
 			continue
 		if offset.dot(heading) <= 0.0:
 			continue
-		if body.global_position.distance_squared_to(target) < my_rank:
+		if body._rank_to(target) < my_rank:
 			return true
 	return false
 
@@ -211,7 +229,7 @@ func knockback(from: Vector3) -> void:
 	push.y = 0.0
 	if push.length() < 0.1:
 		push = Vector3.FORWARD
-	global_position += push.normalized() * 3.2
+	move_and_collide(push.normalized() * 3.2)
 	hp -= 18.0
 	if hp <= 0.0:
 		_drop_cash(30)
@@ -288,6 +306,44 @@ func _climb_through_window(delta: float) -> void:
 	mesh_node.rotation = Vector3.ZERO
 	_sync_clip(true, false)
 
+func _note_bump(wanted: Vector3, before: Vector3) -> void:
+	var moved := global_position - before
+	moved.y = 0.0
+	var expect := wanted.length() * get_physics_process_delta_time()
+	if expect < 0.001 or moved.length() > expect * 0.45:
+		return
+	for i in get_slide_collision_count():
+		var hit := get_slide_collision(i)
+		var normal := hit.get_normal()
+		# The stair slope is a floor. Steering off it pins the horde at the bottom.
+		if normal.y >= 0.5:
+			continue
+		var other: Object = hit.get_collider()
+		if not (other is Node and (other as Node).is_in_group("enemies")):
+			continue
+		normal.y = 0.0
+		if normal.length() < 0.2:
+			continue
+		normal = normal.normalized()
+		_steer_normal = normal
+		var prefer := Vector3(-normal.z, 0.0, normal.x)
+		var to_goal := wanted.normalized()
+		if prefer.dot(to_goal) < 0.0:
+			prefer = -prefer
+		_steer_side = 1.0 if prefer.dot(Vector3(-normal.z, 0.0, normal.x)) >= 0.0 else -1.0
+		_steer_t = 0.85
+		return
+
+func _slide_along(normal: Vector3, want: Vector3) -> Vector3:
+	var side := Vector3(-normal.z, 0.0, normal.x) * _steer_side
+	if side.length() < 0.01:
+		return want.normalized()
+	side = side.normalized()
+	var along := side
+	if want.length() > 0.01 and along.dot(want.normalized()) < 0.0:
+		along = -along
+	return (along * 0.85 + want.normalized() * 0.15).normalized()
+
 func _face_boards() -> void:
 	if _door == null:
 		return
@@ -363,23 +419,46 @@ func _process(_delta: float) -> void:
 	if looping and not _anim.is_playing():
 		_anim.play(_clip)
 
-func _stair_target() -> Vector3:
-	var base := get_tree().get_first_node_in_group("stairs") as Node3D
-	var top := get_tree().get_first_node_in_group("stair_top") as Node3D
-	if global_position.y < 0.5 and base and global_position.distance_to(base.global_position) > 1.15:
-		return base.global_position
-	if top and global_position.y < 2.7:
-		return top.global_position
-	var player := get_tree().get_first_node_in_group("player") as Node3D
-	if player:
-		return player.global_position
-	return global_position
+func _door_fight() -> bool:
+	return _door != null and int(_door.get("boards")) > 0
 
-func _on_stair_climb() -> bool:
-	var player := get_tree().get_first_node_in_group("player") as Node3D
-	if player == null or player.global_position.y <= global_position.y + 1.2:
+func _refresh_chase(player: Node3D, delta: float) -> void:
+	_chase_wait -= delta
+	var moved := player.global_position.distance_to(_chase_at) >= 0.4
+	if _chase_wait > 0.0 and not moved:
+		return
+	_chase_wait = 0.25
+	_chase_at = player.global_position
+	_agent.target_position = _chase_at
+
+func _on_final_leg() -> bool:
+	if _agent == null or _door_fight():
+		return true
+	if _agent.is_navigation_finished():
+		return true
+	var path := _agent.get_current_navigation_path()
+	if path.is_empty():
 		return false
-	return global_position.y < 2.7
+	var idx := _agent.get_current_navigation_path_index()
+	return path.size() - idx <= 1
+
+func _rank_to(target: Vector3) -> float:
+	var along := _path_left()
+	if along >= 0.0:
+		return along
+	return global_position.distance_to(target)
+
+func _path_left() -> float:
+	if _agent == null:
+		return -1.0
+	var path := _agent.get_current_navigation_path()
+	if path.is_empty():
+		return -1.0
+	var idx := clampi(_agent.get_current_navigation_path_index(), 0, path.size() - 1)
+	var left := global_position.distance_to(path[idx])
+	for i in range(idx, path.size() - 1):
+		left += path[i].distance_to(path[i + 1])
+	return left
 
 func _arc(a: Vector3, b: Vector3, c: Vector3, t: float) -> Vector3:
 	var u := 1.0 - t
@@ -392,7 +471,10 @@ func _step_up(dir: Vector3) -> void:
 	var low := PhysicsRayQueryParameters3D.create(feet, feet + ahead)
 	low.exclude = [self]
 	low.collision_mask = 1
-	if space.intersect_ray(low).is_empty():
+	var hit_low := space.intersect_ray(low)
+	if hit_low.is_empty():
+		return
+	if (hit_low.normal as Vector3).y >= 0.5:
 		return
 	var chest := global_position + Vector3(0, STEP_HEIGHT + 0.2, 0)
 	var high := PhysicsRayQueryParameters3D.create(chest, chest + ahead)
@@ -449,12 +531,37 @@ func _wear_model() -> void:
 	add_child(_model)
 	$Mesh.visible = false
 	_ink(_model)
+	_plant_feet(_model)
 	var players: Array = _model.find_children("*", "AnimationPlayer", true, false)
 	if players.size() > 0:
 		_anim = players[0] as AnimationPlayer
 	if "--smoke" in OS.get_cmdline_user_args() and _anim:
 		print("ANIMS ", archetype, _anim.get_animation_list())
 	_play("Idle")
+
+func _plant_feet(root: Node3D) -> void:
+	var box := AABB()
+	var started := false
+	var inv := root.global_transform.affine_inverse()
+	var meshes: Array = root.find_children("*", "MeshInstance3D", true, false)
+	if root is MeshInstance3D:
+		meshes.append(root)
+	for node in meshes:
+		var mesh_node := node as MeshInstance3D
+		if mesh_node.mesh == null:
+			continue
+		var local := mesh_node.mesh.get_aabb()
+		var to_root := inv * mesh_node.global_transform
+		for i in 8:
+			var point: Vector3 = to_root * local.get_endpoint(i)
+			if not started:
+				box = AABB(point, Vector3.ZERO)
+				started = true
+			else:
+				box = box.expand(point)
+	if not started:
+		return
+	root.position.y -= box.position.y
 
 func _sync_clip(moving: bool, attacking: bool) -> void:
 	if _lock > 0.0:

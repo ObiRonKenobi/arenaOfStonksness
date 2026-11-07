@@ -85,6 +85,8 @@ func _ready() -> void:
 	add_to_group("player")
 	collision_mask = 5
 	floor_snap_length = 0.4
+	floor_max_angle = deg_to_rad(50.0)
+	floor_constant_speed = true
 	_ensure_inputs()
 	_build_viewmodel()
 	_gunshot = AudioStreamPlayer.new()
@@ -365,11 +367,13 @@ func buy_smith(stat: String) -> bool:
 	return true
 
 func next_smith_stat() -> String:
-	if smith_damage < Economy.SMITH_MAX:
+	# One level of each stat before the next level: damage, then rate, then ammo.
+	var min_lvl := mini(smith_damage, mini(smith_rate, smith_ammo))
+	if smith_damage == min_lvl and smith_damage < Economy.SMITH_MAX:
 		return "damage"
-	if smith_rate < Economy.SMITH_MAX:
+	if smith_rate == min_lvl and smith_rate < Economy.SMITH_MAX:
 		return "rate"
-	if smith_ammo < Economy.SMITH_MAX:
+	if smith_ammo == min_lvl and smith_ammo < Economy.SMITH_MAX:
 		return "ammo"
 	return ""
 
@@ -946,7 +950,11 @@ func _step_up(dir: Vector3) -> void:
 	var low := PhysicsRayQueryParameters3D.create(feet, feet + ahead)
 	low.exclude = [self]
 	low.collision_mask = 1
-	if space.intersect_ray(low).is_empty():
+	var hit_low := space.intersect_ray(low)
+	if hit_low.is_empty():
+		return
+	# A walkable slope is already a floor. Snapping up it makes the camera bob.
+	if (hit_low.normal as Vector3).y >= 0.5:
 		return
 	var chest := global_position + Vector3(0, STEP_HEIGHT + 0.2, 0)
 	var high := PhysicsRayQueryParameters3D.create(chest, chest + ahead)

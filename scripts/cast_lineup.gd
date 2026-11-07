@@ -19,6 +19,7 @@ func _place(id: String, x: float) -> void:
 	model.rotation.y = PI
 	add_child(model)
 	_ink(model)
+	_plant_feet(model)
 	var playing := false
 	var players: Array = model.find_children("*", "AnimationPlayer", true, false)
 	if players.size() > 0:
@@ -32,6 +33,30 @@ func _place(id: String, x: float) -> void:
 			playing = anim.is_playing()
 	if "--smoke" in OS.get_cmdline_user_args():
 		print("LINEUP ", id, " ", "Idle" if playing else "MISSING")
+
+func _plant_feet(root: Node3D) -> void:
+	var box := AABB()
+	var started := false
+	var inv := root.global_transform.affine_inverse()
+	var meshes: Array = root.find_children("*", "MeshInstance3D", true, false)
+	if root is MeshInstance3D:
+		meshes.append(root)
+	for node in meshes:
+		var mesh_node := node as MeshInstance3D
+		if mesh_node.mesh == null:
+			continue
+		var local := mesh_node.mesh.get_aabb()
+		var to_root := inv * mesh_node.global_transform
+		for i in 8:
+			var point: Vector3 = to_root * local.get_endpoint(i)
+			if not started:
+				box = AABB(point, Vector3.ZERO)
+				started = true
+			else:
+				box = box.expand(point)
+	if not started:
+		return
+	root.position.y -= box.position.y
 
 func _idle_clip(anim: AnimationPlayer) -> String:
 	if anim.has_animation("Idle"):

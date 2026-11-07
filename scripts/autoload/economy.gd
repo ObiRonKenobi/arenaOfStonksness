@@ -17,8 +17,7 @@ const PERKS := {
 }
 
 const CRATE_COST := 950
-const PLANK_PACK_COST := 100
-const PLANK_PACK_COUNT := 2
+const BOARD_ALL_PER_WINDOW := 80
 const MAX_PERKS := 4
 const SMITH_MAX := 3
 
@@ -65,6 +64,9 @@ func markup_cost(_weapon_id: String, next_tier: int) -> int:
 
 func smith_cost(level_after: int) -> int:
 	return 750 * level_after
+
+func board_all_cost(window_count: int) -> int:
+	return BOARD_ALL_PER_WINDOW * maxi(window_count, 0)
 
 func board_payout() -> int:
 	var wave := maxi(GameState.round_index, 1)

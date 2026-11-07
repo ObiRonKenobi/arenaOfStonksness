@@ -2,14 +2,27 @@ extends Node3D
 
 const WALL_H := 3.0
 const UPPER_Y := 3.0
+const WALL_D := 0.4
+# Centers are the old lines. Interior faces are 0.2 in from those centers.
+const NORTH_C := -7.0
+const SOUTH_C := 7.0
+const WEST_C := -9.0
+const EAST_C := 9.0
+const NORTH_IN := NORTH_C + WALL_D * 0.5
+const SOUTH_IN := SOUTH_C - WALL_D * 0.5
+const WEST_IN := WEST_C + WALL_D * 0.5
+const EAST_IN := EAST_C - WALL_D * 0.5
+const SOUTH_OUT := SOUTH_C + WALL_D * 0.5
+const FLOOR_TOP := 3.125
 const ROOM_TONE := preload("res://assets/audio/interior_night.wav")
 const BRICK := preload("res://assets/textures/brick.png")
 const PLANKS := preload("res://assets/textures/planks.png")
 
 func _ready() -> void:
 	add_to_group("map")
-	_box(Vector3(0, -0.15, 0), Vector3(18, 0.3, 14), Color.WHITE, true, PLANKS)
-	_box(Vector3(0, -0.15, -9.6), Vector3(18, 0.3, 6.0), Color.WHITE, true, PLANKS)
+	# Main floor runs under the south wall to its outer face.
+	_box(Vector3(0, -0.15, 0.1), Vector3(18, 0.3, 14.2), Color.WHITE, true, PLANKS)
+	_box(Vector3(0, -0.15, -9.9), Vector3(18, 0.3, 6.6), Color.WHITE, true, PLANKS)
 	_upper_floor()
 	_box(Vector3(0, UPPER_Y + 3.0, 0), Vector3(18, 0.2, 14), Color.WHITE, true, PLANKS)
 	_walls()
@@ -17,64 +30,89 @@ func _ready() -> void:
 	_doors()
 	_window_blocks()
 	_stations()
-	_cast_lineup()
 	_light()
 	_room_tone()
+	_bake_nav()
 
 func _upper_floor() -> void:
-	# Rectangular hole for the stairs: x 5.6..8.8, z 0.6..4.8. Every edge runs with the walls.
-	_box(Vector3(-1.7, UPPER_Y, 0.0), Vector3(14.6, 0.25, 14.0), Color.WHITE, true, PLANKS)
-	_box(Vector3(7.2, UPPER_Y, -3.2), Vector3(3.2, 0.25, 7.6), Color.WHITE, true, PLANKS)
-	_box(Vector3(7.2, UPPER_Y, 5.9), Vector3(3.2, 0.25, 2.2), Color.WHITE, true, PLANKS)
+	# Hole on the east wall, centered along it: x 5.6..8.8, z -2.1..2.1.
+	# The west slab runs past the stair wall so the boards cover its top.
+	var cover := 5.72
+	var west_x0 := -9.0
+	var west_c := (west_x0 + cover) * 0.5
+	_box(Vector3(west_c, UPPER_Y, 0.0), Vector3(cover - west_x0, 0.25, 14.0), Color.WHITE, true, PLANKS)
+	# East caps tuck into the east wall so the landing seam stays plank.
+	# The north cap's collision starts past the hole so the ramp can meet it without a lip.
+	var cap_x0 := 5.6
+	var cap_x1 := 9.05
+	var cap_c := (cap_x0 + cap_x1) * 0.5
+	var cap_w := cap_x1 - cap_x0
+	_box(Vector3(cap_c, UPPER_Y, -4.75), Vector3(cap_w, 0.25, 4.5), Color.WHITE, true, PLANKS)
+	_box(Vector3(cap_c, UPPER_Y, -2.3), Vector3(cap_w, 0.25, 0.4), Color.WHITE, false, PLANKS)
+	_box(Vector3(cap_c, UPPER_Y, 4.55), Vector3(cap_w, 0.25, 4.9), Color.WHITE, true, PLANKS)
 
 func _walls() -> void:
 	_south_rooms()
-	_box(Vector3(-9, WALL_H * 0.5, 0), Vector3(0.4, WALL_H, 14), Color.WHITE, true, BRICK)
-	_box(Vector3(9, WALL_H * 0.5, 0), Vector3(0.4, WALL_H, 14), Color.WHITE, true, BRICK)
-	_box(Vector3(0, WALL_H + 1.5, -7), Vector3(18, 3.0, 0.4), Color.WHITE, true, BRICK)
-	_box(Vector3(0, WALL_H + 1.5, 7), Vector3(18, 3.0, 0.4), Color.WHITE, true, BRICK)
-	_box(Vector3(-9, WALL_H + 1.5, 0), Vector3(0.4, 3.0, 14), Color.WHITE, true, BRICK)
-	_box(Vector3(9, WALL_H + 1.5, 0), Vector3(0.4, 3.0, 14), Color.WHITE, true, BRICK)
+	_box(Vector3(WEST_C, WALL_H * 0.5, 0), Vector3(WALL_D, WALL_H, 14.4), Color.WHITE, true, BRICK)
+	_box(Vector3(EAST_C, WALL_H * 0.5, 0), Vector3(WALL_D, WALL_H, 14.4), Color.WHITE, true, BRICK)
+	_box(Vector3(0, WALL_H + 1.5, NORTH_C), Vector3(18.4, 3.0, WALL_D), Color.WHITE, true, BRICK)
+	_box(Vector3(0, WALL_H + 1.5, SOUTH_C), Vector3(18.4, 3.0, WALL_D), Color.WHITE, true, BRICK)
+	_box(Vector3(WEST_C, WALL_H + 1.5, 0), Vector3(WALL_D, 3.0, 14.4), Color.WHITE, true, BRICK)
+	_box(Vector3(EAST_C, WALL_H + 1.5, 0), Vector3(WALL_D, 3.0, 14.4), Color.WHITE, true, BRICK)
 	_north_piers()
 
 func _north_piers() -> void:
-	_box(Vector3(-7.05, 1.5, -7), Vector3(3.9, 3.0, 0.4), Color.WHITE, true, BRICK)
-	_box(Vector3(-2.1, 1.5, -7), Vector3(2.4, 3.0, 0.4), Color.WHITE, true, BRICK)
-	_box(Vector3(2.1, 1.5, -7), Vector3(2.4, 3.0, 0.4), Color.WHITE, true, BRICK)
-	_box(Vector3(7.05, 1.5, -7), Vector3(3.9, 3.0, 0.4), Color.WHITE, true, BRICK)
-	_box(Vector3(-4.2, 2.7, -7), Vector3(1.8, 0.6, 0.4), Color.WHITE, true, BRICK)
-	_box(Vector3(0.0, 2.7, -7), Vector3(1.8, 0.6, 0.4), Color.WHITE, true, BRICK)
-	_box(Vector3(4.2, 2.7, -7), Vector3(1.8, 0.6, 0.4), Color.WHITE, true, BRICK)
+	_box(Vector3(-7.05, 1.5, NORTH_C), Vector3(3.9, 3.0, WALL_D), Color.WHITE, true, BRICK)
+	_box(Vector3(-2.1, 1.5, NORTH_C), Vector3(2.4, 3.0, WALL_D), Color.WHITE, true, BRICK)
+	_box(Vector3(2.1, 1.5, NORTH_C), Vector3(2.4, 3.0, WALL_D), Color.WHITE, true, BRICK)
+	_box(Vector3(7.05, 1.5, NORTH_C), Vector3(3.9, 3.0, WALL_D), Color.WHITE, true, BRICK)
+	_box(Vector3(-4.2, 2.7, NORTH_C), Vector3(1.8, 0.6, WALL_D), Color.WHITE, true, BRICK)
+	_box(Vector3(0.0, 2.7, NORTH_C), Vector3(1.8, 0.6, WALL_D), Color.WHITE, true, BRICK)
+	_box(Vector3(4.2, 2.7, NORTH_C), Vector3(1.8, 0.6, WALL_D), Color.WHITE, true, BRICK)
 	_window_frames()
 
 func _window_frames() -> void:
-	var sill := Color(0.34, 0.31, 0.29)
 	var frame := Color(0.2, 0.14, 0.11)
 	var glass := Color(1, 1, 1, 0)
+	# 1.5 m clear opening. Posts overlap the 1.8 m pier gap so there is no slit.
+	var post_c := 0.85
+	var post_w := 0.2
+	var sill_y := 1.05
+	var head_y := 2.4
 	for x in [-4.2, 0.0, 4.2]:
-		_box(Vector3(x, 0.525, -7), Vector3(1.78, 1.05, 0.4), sill, true)
-		_box(Vector3(x - 0.84, 1.72, -7), Vector3(0.1, 1.3, 0.4), frame, true)
-		_box(Vector3(x + 0.84, 1.72, -7), Vector3(0.1, 1.3, 0.4), frame, true)
-		_pane(Vector3(x, 1.75, -7.0), Vector3(1.5, 1.15, 0.04), glass, 0.0)
+		_box(Vector3(x, sill_y * 0.5, NORTH_C), Vector3(1.9, sill_y, WALL_D), Color.WHITE, true, BRICK)
+		_box(Vector3(x - post_c, (sill_y + head_y) * 0.5, NORTH_C), Vector3(post_w, head_y - sill_y, WALL_D), frame, true)
+		_box(Vector3(x + post_c, (sill_y + head_y) * 0.5, NORTH_C), Vector3(post_w, head_y - sill_y, WALL_D), frame, true)
+		_box(Vector3(x, (head_y + WALL_H) * 0.5, NORTH_C), Vector3(1.6, WALL_H - head_y, WALL_D), Color.WHITE, true, BRICK)
+		_pane(Vector3(x, (sill_y + head_y) * 0.5, NORTH_C), Vector3(1.5, head_y - sill_y, 0.04), glass, 0.0)
 
 func _south_rooms() -> void:
 	# Ground-floor south wall, split around doorways at x = -6, 0, and 6.
-	_box(Vector3(-7.85, 1.5, 7), Vector3(2.3, 3.0, 0.4), Color.WHITE, true, BRICK)
-	_box(Vector3(-3.0, 1.5, 7), Vector3(4.6, 3.0, 0.4), Color.WHITE, true, BRICK)
-	_box(Vector3(3.0, 1.5, 7), Vector3(4.6, 3.0, 0.4), Color.WHITE, true, BRICK)
-	_box(Vector3(7.85, 1.5, 7), Vector3(2.3, 3.0, 0.4), Color.WHITE, true, BRICK)
+	_box(Vector3(-7.85, 1.5, SOUTH_C), Vector3(2.3, 3.0, WALL_D), Color.WHITE, true, BRICK)
+	_box(Vector3(-3.0, 1.5, SOUTH_C), Vector3(4.6, 3.0, WALL_D), Color.WHITE, true, BRICK)
+	_box(Vector3(3.0, 1.5, SOUTH_C), Vector3(4.6, 3.0, WALL_D), Color.WHITE, true, BRICK)
+	_box(Vector3(7.85, 1.5, SOUTH_C), Vector3(2.3, 3.0, WALL_D), Color.WHITE, true, BRICK)
 	for x in [-6.0, 0.0, 6.0]:
-		_box(Vector3(x, 2.7, 7), Vector3(1.4, 0.6, 0.4), Color.WHITE, true, BRICK)
-	_box(Vector3(0, -0.15, 9.625), Vector3(18, 0.3, 5.55), Color.WHITE, true, PLANKS)
-	_box(Vector3(0, UPPER_Y, 9.6), Vector3(18.4, 0.25, 5.6), Color.WHITE, true, PLANKS)
-	_box(Vector3(-9, 1.5, 9.6), Vector3(0.4, 3.0, 5.6), Color.WHITE, true, BRICK)
-	_box(Vector3(9, 1.5, 9.6), Vector3(0.4, 3.0, 5.6), Color.WHITE, true, BRICK)
-	_box(Vector3(-3, 1.5, 9.6), Vector3(0.4, 3.0, 5.2), Color.WHITE, true, BRICK)
-	_box(Vector3(3, 1.5, 9.6), Vector3(0.4, 3.0, 5.2), Color.WHITE, true, BRICK)
-	_box(Vector3(0, 1.5, 12.2), Vector3(18.4, 3.0, 0.4), Color.WHITE, true, BRICK)
-	_gate("Street Smith", 400, Vector3(-6, 0, 7), -1.55)
-	_gate("The Markup", 800, Vector3(0, 0, 7), 1.55)
-	_gate("Black Market", 500, Vector3(6, 0, 7), 1.55)
+		_box(Vector3(x, (2.4 + WALL_H) * 0.5, SOUTH_C), Vector3(1.5, WALL_H - 2.4, WALL_D), Color.WHITE, true, BRICK)
+	# Shop floors overlap the south wall and the back wall so no seam opens to the sky.
+	var shop_z0 := SOUTH_OUT - 0.2
+	var shop_z1 := 12.4
+	var shop_depth := shop_z1 - shop_z0
+	var shop_z := (shop_z0 + shop_z1) * 0.5
+	_box(Vector3(0, -0.15, shop_z), Vector3(18, 0.3, shop_depth), Color.WHITE, true, PLANKS)
+	_box(Vector3(0, UPPER_Y, shop_z), Vector3(18.4, 0.25, shop_depth), Color.WHITE, true, PLANKS)
+	_box(Vector3(WEST_C, 1.5, shop_z), Vector3(WALL_D, 3.0, shop_depth), Color.WHITE, true, BRICK)
+	_box(Vector3(EAST_C, 1.5, shop_z), Vector3(WALL_D, 3.0, shop_depth), Color.WHITE, true, BRICK)
+	var party_z0 := SOUTH_OUT
+	var party_z1 := 12.0
+	var party_z := (party_z0 + party_z1) * 0.5
+	var party_d := party_z1 - party_z0
+	_box(Vector3(-3, 1.5, party_z), Vector3(0.2, 3.0, party_d), Color.WHITE, true, BRICK)
+	_box(Vector3(3, 1.5, party_z), Vector3(0.2, 3.0, party_d), Color.WHITE, true, BRICK)
+	_box(Vector3(0, 1.5, 12.2), Vector3(18.4, 3.0, WALL_D), Color.WHITE, true, BRICK)
+	_gate("Street Smith", 400, Vector3(-6, 0, SOUTH_C), -1.55)
+	_gate("The Markup", 800, Vector3(0, 0, SOUTH_C), 1.55)
+	_gate("Black Market", 500, Vector3(6, 0, SOUTH_C), 1.55)
 
 func _gate(room_name: String, price: int, pos: Vector3, slide: float) -> void:
 	var gate := StaticBody3D.new()
@@ -86,14 +124,16 @@ func _gate(room_name: String, price: int, pos: Vector3, slide: float) -> void:
 	add_child(gate)
 
 func _doors() -> void:
-	_door(Vector3(-4.2, 1.05, -7), Vector3(0, 0, -2.2))
-	_door(Vector3(0, 1.05, -7), Vector3(0, 0, -2.2))
-	_door(Vector3(4.2, 1.05, -7), Vector3(0, 0, -2.2))
+	_door(Vector3(-4.2, 1.05, NORTH_C), Vector3(0, 0, -2.2))
+	_door(Vector3(0, 1.05, NORTH_C), Vector3(0, 0, -2.2))
+	_door(Vector3(4.2, 1.05, NORTH_C), Vector3(0, 0, -2.2))
 
 func _window_blocks() -> void:
-	_player_block(Vector3(-4.2, 1.72, -6.72))
-	_player_block(Vector3(0.0, 1.72, -6.72))
-	_player_block(Vector3(4.2, 1.72, -6.72))
+	# Room face of the block is the interior plane. The block itself is inside the wall.
+	var block_z := NORTH_IN - 0.08
+	_player_block(Vector3(-4.2, 1.725, block_z))
+	_player_block(Vector3(0.0, 1.725, block_z))
+	_player_block(Vector3(4.2, 1.725, block_z))
 
 func _player_block(pos: Vector3) -> void:
 	var body := StaticBody3D.new()
@@ -102,7 +142,7 @@ func _player_block(pos: Vector3) -> void:
 	body.collision_mask = 0
 	var shape := CollisionShape3D.new()
 	var box := BoxShape3D.new()
-	box.size = Vector3(1.55, 1.4, 0.22)
+	box.size = Vector3(1.5, 1.35, 0.16)
 	shape.shape = box
 	body.add_child(shape)
 	add_child(body)
@@ -116,39 +156,92 @@ func _door(pos: Vector3, outside: Vector3) -> void:
 	door.set_outside(outside)
 
 func _stairs() -> void:
-	var marker := Marker3D.new()
-	marker.name = "StairBase"
-	marker.position = Vector3(7.2, 0.2, 4.7)
-	marker.add_to_group("stairs")
-	add_child(marker)
-	var landing := Marker3D.new()
-	landing.name = "StairTop"
-	landing.position = Vector3(7.2, 3.2, 0.75)
-	landing.add_to_group("stair_top")
-	add_child(landing)
-	var tread := 0.32
-	var rise_step := 0.25
-	for i in 12:
-		var top := rise_step * float(i + 1)
-		var z := 4.55 - float(i) * tread
-		var step := _box(Vector3(7.2, top - rise_step * 0.5, z), Vector3(2.6, rise_step, tread), Color.WHITE, true, PLANKS)
+	# 17 risers to the upstairs floor. The run fills the east-wall hole, bottom toward the south.
+	var z_south := 2.1
+	var z_north := -2.1
+	var rise := FLOOR_TOP / 17.0
+	var tread := (z_south - z_north) / 16.0
+	var width := EAST_IN - 5.6
+	var cx := (5.6 + EAST_IN) * 0.5
+	var wood := 0.06
+	for i in 16:
+		var top := rise * float(i + 1)
+		var z := z_south - tread * 0.5 - float(i) * tread
+		var brick_h := maxf(top - wood, 0.02)
+		_box(Vector3(cx, brick_h * 0.5, z), Vector3(width, brick_h, tread), Color.WHITE, false, BRICK)
+		var step := _box(Vector3(cx, top - wood * 0.5, z), Vector3(width, wood, tread), Color.WHITE, false, PLANKS)
 		step.add_to_group("stair_steps")
-	_box(Vector3(7.2, UPPER_Y, 0.85), Vector3(2.6, 0.25, 0.7), Color.WHITE, true, PLANKS)
+	_stair_ramp(5.6, EAST_IN, z_south, z_north)
+	# Brick side wall stops inside the floor slab so the boards cover its top.
+	var wall_top := UPPER_Y
+	_box(Vector3(5.5, wall_top * 0.5, 0.0), Vector3(0.2, wall_top, z_south - z_north), Color.WHITE, true, BRICK)
+
+func _stair_ramp(x0: float, x1: float, z_south: float, z_north: float) -> void:
+	# One slope from the ground floor to a flat nose under the landing. No risers to bob on.
+	var inset := 0.06
+	var xa := x0 + inset
+	var xb := x1 - inset
+	var z_flat := z_north - 0.55
+	var y_top := FLOOR_TOP
+	var body := StaticBody3D.new()
+	body.collision_layer = 1
+	body.collision_mask = 1
+	body.add_to_group("stair_steps")
+	body.add_to_group("navmesh")
+	var shape := CollisionShape3D.new()
+	var hull := ConvexPolygonShape3D.new()
+	hull.margin = 0.001
+	hull.points = PackedVector3Array([
+		Vector3(xa, -0.2, z_south), Vector3(xb, -0.2, z_south),
+		Vector3(xa, -0.2, z_flat), Vector3(xb, -0.2, z_flat),
+		Vector3(xa, 0.0, z_south), Vector3(xb, 0.0, z_south),
+		Vector3(xa, y_top, z_north), Vector3(xb, y_top, z_north),
+		Vector3(xa, y_top, z_flat), Vector3(xb, y_top, z_flat),
+	])
+	shape.shape = hull
+	body.add_child(shape)
+	add_child(body)
+
+var _nav_region: NavigationRegion3D
+
+func _bake_nav() -> void:
+	# Group navmesh is floors, walls, ramps, and stations. Gates are not in it.
+	# A new stair is any solid slope under the limits below. A new door is another gate.
+	var nav := NavigationMesh.new()
+	nav.agent_radius = 0.4
+	nav.agent_height = 1.75
+	nav.agent_max_climb = 0.3
+	nav.agent_max_slope = 45.0
+	nav.cell_size = 0.1
+	nav.cell_height = 0.05
+	nav.geometry_parsed_geometry_type = NavigationMesh.PARSED_GEOMETRY_STATIC_COLLIDERS
+	nav.geometry_collision_mask = 1
+	nav.geometry_source_geometry_mode = NavigationMesh.SOURCE_GEOMETRY_GROUPS_WITH_CHILDREN
+	nav.geometry_source_group_name = "navmesh"
+	var source := NavigationMeshSourceGeometryData3D.new()
+	NavigationServer3D.parse_source_geometry_data(nav, source, self)
+	NavigationServer3D.bake_from_source_geometry_data(nav, source)
+	if _nav_region == null:
+		_nav_region = NavigationRegion3D.new()
+		_nav_region.name = "Nav"
+		add_child(_nav_region)
+	_nav_region.navigation_mesh = nav
 
 func _stations() -> void:
-	_station("wall", Vector3(-7.85, 0, 6.2), "street_smg", "", 180)
-	_station("wall", Vector3(-3, 0, 6.2), "debt_shotgun", "", 180)
-	_station("wall", Vector3(1.6, 0, 6.2), "rent_rifle", "", 180)
-	_station("perk", Vector3(3, 0, 6.2), "", "thick_skin", 180)
-	_station("perk", Vector3(7.85, 0, 6.2), "", "rapid_fire", 180)
-	_station("perk", Vector3(-8.4, 0, -2), "", "tin_vest", 90)
-	_station("perk", Vector3(-8.4, 0, 1.5), "", "mean_streak", 90)
-	_station("planks", Vector3(-8.4, 0, 4), "", "", 90)
+	# Wall mounts sit on the interior face; shops stay on the floor in their rooms.
+	_station("wall", Vector3(-7.85, 0, SOUTH_IN), "street_smg", "", 180)
+	_station("wall", Vector3(-3, 0, SOUTH_IN), "debt_shotgun", "", 180)
+	_station("wall", Vector3(1.6, 0, SOUTH_IN), "rent_rifle", "", 180)
+	_station("perk", Vector3(3, 0, SOUTH_IN), "", "thick_skin", 180)
+	_station("perk", Vector3(7.85, 0, SOUTH_IN), "", "rapid_fire", 180)
+	_station("perk", Vector3(WEST_IN, 0, -2), "", "tin_vest", 90)
+	_station("perk", Vector3(WEST_IN, 0, 1.5), "", "mean_streak", 90)
+	_station("planks", Vector3(WEST_IN, 0, 4), "", "", 90)
 	_station("smith", Vector3(-6, 0, 11.6), "", "", 180)
 	_station("markup", Vector3(0, 0, 11.6), "", "", 180)
 	_station("crate", Vector3(6, 0, 11.6), "", "", 180)
-	_station("wall", Vector3(8.4, 0, -2), "pop_junk", "", -90)
-	_station("wall", Vector3(8.4, 0, 1.5), "ledger_cannon", "", -90)
+	_station("wall", Vector3(-1.6, FLOOR_TOP, NORTH_IN), "pop_junk", "", 0)
+	_station("wall", Vector3(1.6, FLOOR_TOP, NORTH_IN), "ledger_cannon", "", 0)
 
 func _cast_lineup() -> void:
 	var row := Node3D.new()
@@ -164,6 +257,7 @@ func _station(kind: String, pos: Vector3, weapon_id: String, perk_id: String, ya
 	station.perk_id = perk_id
 	station.position = pos
 	station.rotation.y = deg_to_rad(yaw)
+	station.add_to_group("navmesh")
 	add_child(station)
 
 func _pane(pos: Vector3, size: Vector3, color: Color, tilt: float) -> void:
@@ -188,6 +282,7 @@ func _box(pos: Vector3, size: Vector3, color: Color, solid: bool, surface: Textu
 	if solid:
 		body.collision_layer = 1
 		body.collision_mask = 1
+		body.add_to_group("navmesh")
 		var shape := CollisionShape3D.new()
 		var box := BoxShape3D.new()
 		box.size = size
@@ -196,6 +291,7 @@ func _box(pos: Vector3, size: Vector3, color: Color, solid: bool, surface: Textu
 	var mesh := MeshInstance3D.new()
 	var mat := StandardMaterial3D.new()
 	mat.albedo_color = color
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	if surface:
 		mesh.mesh = _tiled_box(size, pos)
 		mat.albedo_texture = surface

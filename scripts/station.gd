@@ -65,9 +65,7 @@ func use(player: Node) -> void:
 		"markup":
 			player.call("markup")
 		"planks":
-			if player.call("try_buy", Economy.PLANK_PACK_COST):
-				player.set("planks", int(player.get("planks")) + Economy.PLANK_PACK_COUNT)
-				GameState.toast("Planks: %d" % int(player.get("planks")))
+			_board_all_windows(player)
 
 func prompt_for(player: Node) -> String:
 	match kind:
@@ -94,7 +92,14 @@ func prompt_for(player: Node) -> String:
 				return "%s is v3" % held
 			return "E  Upgrade %s to %s  $%d" % [held, Economy.tier_label(tier + 1), Economy.markup_cost(str(player.get("weapon_id")), tier + 1)]
 		"planks":
-			return "E  Planks x%d  $%d" % [Economy.PLANK_PACK_COUNT, Economy.PLANK_PACK_COST]
+			var windows := get_tree().get_nodes_in_group("barricades")
+			var open_count := 0
+			for node in windows:
+				if int(node.get("boards")) < int(node.get("max_boards")):
+					open_count += 1
+			if open_count == 0:
+				return "Windows are boarded"
+			return "E  Board all windows  $%d" % Economy.board_all_cost(windows.size())
 	return "E"
 
 func _buy_wall(player: Node) -> void:
@@ -106,6 +111,24 @@ func _buy_wall(player: Node) -> void:
 	var price := int(Economy.weapon(weapon_id).price)
 	if player.call("try_buy", price):
 		player.call("give_weapon", weapon_id, 1, false)
+
+func _board_all_windows(player: Node) -> void:
+	var windows := get_tree().get_nodes_in_group("barricades")
+	var needs := false
+	for node in windows:
+		if int(node.get("boards")) < int(node.get("max_boards")):
+			needs = true
+			break
+	if not needs:
+		GameState.toast("Windows are boarded.")
+		return
+	var cost := Economy.board_all_cost(windows.size())
+	if not player.call("try_buy", cost):
+		return
+	for node in windows:
+		node.set("boards", int(node.get("max_boards")))
+		node.call("_rebuild")
+	GameState.toast("Every window is boarded.")
 
 func _buy_crate(player: Node) -> void:
 	if not player.call("try_buy", Economy.CRATE_COST):
@@ -135,7 +158,14 @@ func _model_path() -> Array:
 	if kind == "perk" and PERK_PATH.has(perk_id):
 		return [PERK_PATH[perk_id], 0.0]
 	if PROP_PATH.has(kind):
-		return [PROP_PATH[kind], 0.0]
+		var yaw := 0.0
+		if kind == "planks":
+			yaw = 90.0
+		elif kind == "smith":
+			yaw = 270.0
+		elif kind == "markup":
+			yaw = -90.0
+		return [PROP_PATH[kind], yaw]
 	return []
 
 func _mount_model() -> bool:
@@ -145,32 +175,48 @@ func _mount_model() -> bool:
 	var packed := load(str(spec[0])) as PackedScene
 	if packed == null:
 		return false
-	var hang := kind == "wall"
+	var hang := kind == "wall" or kind == "perk"
+	var floor_shop := kind in ["smith", "markup", "crate", "planks"]
 	var holder := Node3D.new()
 	add_child(holder)
 	var model := packed.instantiate() as Node3D
 	model.rotation_degrees.y = float(spec[1])
 	holder.add_child(model)
 	var bounds := _bounds_under(holder)
-	if not hang:
+	if not hang or kind == "perk":
 		_use_texture_color(model)
 	if not hang and bounds.size.y < maxf(bounds.size.x, bounds.size.z) * 0.35:
+		model.rotation_degrees = Vector3(-90.0, float(spec[1]) + 180.0, 0.0)
+		bounds = _bounds_under(holder)
+	if hang and kind == "perk" and bounds.size.y < maxf(bounds.size.x, bounds.size.z) * 0.35:
 		model.rotation_degrees = Vector3(-90.0, float(spec[1]) + 180.0, 0.0)
 		bounds = _bounds_under(holder)
 	var span := maxf(bounds.size.x, maxf(bounds.size.y, bounds.size.z))
 	if span < 0.001:
 		holder.queue_free()
 		return false
-	var target := 1.05 if hang else 1.2
+	var target := 1.05 if kind == "wall" else (0.9 if kind == "perk" else 1.2)
 	var fitted := target / span
 	model.scale *= fitted
 	var center := bounds.get_center() * fitted
 	var ext := bounds.size * fitted
 	model.position = -center
 	if hang:
-		holder.position = Vector3(0, 1.15, -0.08)
-		_set_hit(Vector3(maxf(ext.x, 0.7), maxf(ext.y, 0.35) + 0.2, 0.28), Vector3(0, 1.15, 0.02))
-		_label.position = Vector3(0, 1.15 + ext.y * 0.5 + 0.22, 0.05)
+		# Back of the model sits on the wall; only the thickness comes into the room.
+		var mount_y := 1.55 - ext.y * 0.5
+		holder.position = Vector3(0, mount_y, ext.z * 0.5)
+		_set_hit(Vector3(maxf(ext.x, 0.55), maxf(ext.y, 0.35) + 0.15, maxf(ext.z, 0.2)), Vector3(0, mount_y, ext.z * 0.5))
+		_label.position = Vector3(0, mount_y + ext.y * 0.5 + 0.18, ext.z + 0.02)
+	elif floor_shop:
+		var into_room := 0.0
+		if kind == "planks":
+			into_room = ext.z * 0.5
+		elif kind == "smith":
+			# Station sits 0.4 m in front of the shop wall. The back face lands on that wall.
+			into_room = ext.z * 0.5 - 0.4
+		holder.position = Vector3(0, ext.y * 0.5, into_room)
+		_set_hit(Vector3(maxf(ext.x, 0.55), ext.y, maxf(ext.z, 0.35)), Vector3(0, ext.y * 0.5, into_room))
+		_label.position = Vector3(0, ext.y + 0.28, into_room)
 	else:
 		holder.position = Vector3(0, ext.y * 0.5, ext.z * 0.5 + 0.08)
 		_set_hit(Vector3(maxf(ext.x, 0.55), ext.y, maxf(ext.z, 0.35)), Vector3(0, ext.y * 0.5, ext.z * 0.35))
