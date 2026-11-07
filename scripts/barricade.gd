@@ -43,6 +43,12 @@ func spawn_position() -> Vector3:
 func set_outside(offset: Vector3) -> void:
 	_outside = offset
 
+func outward() -> Vector3:
+	var flat := Vector3(_outside.x, 0.0, _outside.z)
+	if flat.length() < 0.01:
+		return Vector3.FORWARD
+	return flat.normalized()
+
 func board(player: Node) -> void:
 	if boards >= max_boards:
 		return
