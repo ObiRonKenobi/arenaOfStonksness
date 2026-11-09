@@ -3,8 +3,14 @@ extends Node3D
 func _ready() -> void:
 	_ensure_inputs()
 	GameState.reset()
+	if "--gunfit" in OS.get_cmdline_user_args():
+		add_child(load("res://tools/gun_fit.gd").new())
+		return
 	if "--audit" in OS.get_cmdline_user_args():
 		_audit()
+		return
+	if "--boards" in OS.get_cmdline_user_args():
+		_boards_shot()
 		return
 	if "--smoke" in OS.get_cmdline_user_args():
 		_smoke()
@@ -102,10 +108,296 @@ func _smoke() -> void:
 		boarded = door != null and int(door.get("boards")) >= 1
 		paid = int(player.get("cash")) >= start_cash + 10
 	print("SMOKE boarded=%s paid=%s cash=%s" % [boarded, paid, player.get("cash") if player else 0])
-	var ok := false
-	ok = GameState.running and GameState.round_index == 1 and barricades == 3 and stations == 13 and enemies > 0 and jumped and window_blocked and climbed and slots_ok and boarded and paid and int(player.get("cash")) >= 999999
+	var base_ok := GameState.running and GameState.round_index == 1 and barricades == 3 and stations == 13 and enemies > 0 and jumped and window_blocked and climbed and slots_ok and boarded and paid and int(player.get("cash")) >= 999999
+	_smoke_ai(false)
+	var drop_gap := await _smoke_drop_gap()
+	var drops_ok := drop_gap <= 0.02
+	print("SMOKE drops=%s gap=%.3f" % [drops_ok, drop_gap])
+	var sprint: Dictionary = await _smoke_sprint(body)
+	print("SMOKE sprint=%s walked=%.2f sprinted=%.2f aim_cut=%s sprint_cut=%s" % [sprint.ok, sprint.walked, sprint.sprinted, sprint.aim_cut, sprint.sprint_cut])
+	var stair: Dictionary = await _smoke_stairs(body)
+	print("SMOKE stairs=%s same=%s through=%s y=%.2f x=%.2f safe=%s flank=%s" % [stair.ok, stair.same, stair.through, stair.y, stair.x, stair.safe, stair.flank])
+	var queue: Dictionary = await _smoke_queue(body)
+	print("SMOKE queue=%s inside=%s waiting=%s" % [queue.ok, queue.inside, queue.waiting])
+	var view: Dictionary = await _smoke_view(body)
+	print("SMOKE view=%s rifle=%s pistol=%s" % [view.ok, view.rifle, view.pistol])
+	var down: Dictionary = await _smoke_down(body)
+	print("SMOKE down=%s cam_dy=%.3f roll=%.1f over=%s" % [down.ok, down.dy, down.roll, down.over])
+	var ok := base_ok and drops_ok and bool(sprint.ok) and bool(down.ok) and bool(stair.ok) and bool(view.ok) and bool(queue.ok)
 	print("SMOKE_OK" if ok else "SMOKE_FAIL")
 	get_tree().quit(0 if ok else 1)
+
+func _smoke_ai(active: bool) -> void:
+	var director := get_node_or_null("/root/RoundDirector")
+	if director:
+		director.set_process(active)
+	for node in get_tree().get_nodes_in_group("enemies"):
+		node.set_physics_process(active)
+
+func _smoke_drop_gap() -> float:
+	var pickup := preload("res://scenes/cash_pickup.tscn").instantiate()
+	pickup.kind = "cash"
+	add_child(pickup)
+	pickup.global_position = Vector3(2.2, 1.2, -1.5)
+	for _i in 60:
+		await get_tree().physics_frame
+	if not is_instance_valid(pickup):
+		return 99.0
+	var gap := _smoke_floor_gap(pickup.global_position)
+	pickup.queue_free()
+	return gap
+
+func _smoke_floor_gap(at: Vector3) -> float:
+	var from := at + Vector3(0.0, 0.35, 0.0)
+	var query := PhysicsRayQueryParameters3D.create(from, from + Vector3(0.0, -4.0, 0.0))
+	query.collision_mask = 1
+	var skip: Array[RID] = []
+	for node in get_tree().get_nodes_in_group("player"):
+		if node is CollisionObject3D:
+			skip.append((node as CollisionObject3D).get_rid())
+	query.exclude = skip
+	var hit := get_world_3d().direct_space_state.intersect_ray(query)
+	if hit.is_empty():
+		return 99.0
+	return absf(at.y - (hit.position as Vector3).y)
+
+func _smoke_sprint(body: CharacterBody3D) -> Dictionary:
+	Input.action_release("sprint")
+	Input.action_release("aim")
+	Input.action_release("move_forward")
+	Input.action_release("move_back")
+	Input.action_release("move_left")
+	Input.action_release("move_right")
+	Input.action_release("shoot")
+	for _i in 2:
+		await get_tree().physics_frame
+	body.rotation = Vector3(0.0, -PI * 0.5, 0.0)
+	body.velocity = Vector3.ZERO
+	body.global_position = Vector3(-4.5, 0.4, 0.4)
+	for _i in 20:
+		await get_tree().physics_frame
+	var spot := body.global_position
+	Input.action_press("move_forward")
+	body.global_position = spot
+	body.velocity = Vector3.ZERO
+	var frames := 36
+	for _i in frames:
+		await get_tree().physics_frame
+	var walked := Vector2(body.global_position.x - spot.x, body.global_position.z - spot.z).length()
+	body.global_position = spot
+	body.velocity = Vector3.ZERO
+	Input.action_press("sprint")
+	for _i in frames:
+		await get_tree().physics_frame
+	var sprinted := Vector2(body.global_position.x - spot.x, body.global_position.z - spot.z).length()
+	Input.action_press("aim")
+	for _i in 10:
+		await get_tree().physics_frame
+	var aim_cut := float(body.get("_aim")) > 0.25 and float(body.get("_sprint")) < 0.4 and str(body.get("_focus")) == "aim"
+	Input.action_release("aim")
+	Input.action_release("sprint")
+	for _i in 3:
+		await get_tree().physics_frame
+	Input.action_press("aim")
+	for _i in 18:
+		await get_tree().physics_frame
+	var aimed := float(body.get("_aim")) > 0.6 and str(body.get("_focus")) == "aim"
+	Input.action_press("sprint")
+	for _i in 12:
+		await get_tree().physics_frame
+	var sprint_cut := aimed and float(body.get("_aim")) < 0.3 and str(body.get("_focus")) == "sprint"
+	Input.action_release("sprint")
+	Input.action_release("aim")
+	Input.action_release("move_forward")
+	Input.action_release("move_back")
+	Input.action_release("move_left")
+	Input.action_release("move_right")
+	Input.action_release("shoot")
+	var faster := sprinted > walked * 1.2 and sprinted > walked + 0.45
+	return {
+		"ok": faster and aim_cut and sprint_cut,
+		"walked": walked,
+		"sprinted": sprinted,
+		"aim_cut": aim_cut,
+		"sprint_cut": sprint_cut,
+	}
+
+func _smoke_stairs(body: CharacterBody3D) -> Dictionary:
+	for node in get_tree().get_nodes_in_group("barricades"):
+		node.set("boards", 0)
+		node.call("_rebuild")
+	var foe: CharacterBody3D = null
+	for node in get_tree().get_nodes_in_group("enemies"):
+		var candidate := node as CharacterBody3D
+		if candidate != null and not bool(candidate.get("_dead")):
+			foe = candidate
+			break
+	if foe == null:
+		return {"ok": false, "same": false, "through": true, "y": 0.0, "x": 0.0, "safe": false, "flank": false}
+	_smoke_ai(false)
+	foe.set_physics_process(true)
+	foe.set("_door", null)
+	foe.set("_swing_t", -1.0)
+	foe.set("_cool", 0.0)
+	foe.set("_flank_on", true)
+	foe.set("_climbing", false)
+	for action in ["move_forward", "move_back", "move_left", "move_right", "sprint", "aim", "interact"]:
+		Input.action_release(action)
+	body.set_physics_process(false)
+	body.global_position = Vector3(7.2, 3.2, 2.35)
+	body.velocity = Vector3.ZERO
+	foe.global_position = Vector3(7.2, 3.2, 1.4)
+	foe.velocity = Vector3.ZERO
+	foe.look_at(body.global_position, Vector3.UP)
+	var same: bool = foe.call("_in_strike", body)
+	foe.global_position = Vector3(7.2, 0.15, 2.45)
+	foe.velocity = Vector3.ZERO
+	foe.look_at(body.global_position, Vector3.UP)
+	var through: bool = foe.call("_in_strike", body)
+	var health := float(body.get("health"))
+	var y0 := foe.global_position.y
+	foe.set("_chase_wait", 0.0)
+	for _i in 45:
+		await get_tree().physics_frame
+	var safe := absf(float(body.get("health")) - health) < 0.1 and foe.global_position.y < body.global_position.y - 1.4
+	var flank_off := not bool(foe.get("_flank_on"))
+	for _i in 255:
+		await get_tree().physics_frame
+	var climbed := foe.global_position.y > y0 + 0.45
+	var on_stair := foe.global_position.x > 5.6
+	foe.set_physics_process(false)
+	body.set_physics_process(true)
+	return {
+		"ok": same and not through and climbed and on_stair and safe and flank_off,
+		"same": same,
+		"through": through,
+		"y": foe.global_position.y,
+		"x": foe.global_position.x,
+		"safe": safe,
+		"flank": flank_off,
+	}
+
+func _smoke_queue(body: CharacterBody3D) -> Dictionary:
+	var door: Node3D = null
+	for node in get_tree().get_nodes_in_group("barricades"):
+		if absf((node as Node3D).global_position.x) < 0.2:
+			door = node as Node3D
+			break
+	if door == null:
+		return {"ok": false, "inside": 0, "waiting": 4}
+	door.set("boards", 0)
+	door.call("_rebuild")
+	_smoke_ai(false)
+	body.set_physics_process(false)
+	body.global_position = Vector3(0.0, 0.2, -4.5)
+	body.velocity = Vector3.ZERO
+	var pack: Array[Node] = []
+	var spots: Array[Vector3] = [
+		Vector3(-0.9, 0.15, -8.7),
+		Vector3(-0.3, 0.15, -8.5),
+		Vector3(0.35, 0.15, -8.8),
+		Vector3(0.95, 0.15, -8.6),
+	]
+	for spot in spots:
+		var enemy := preload("res://scenes/enemy.tscn").instantiate()
+		add_child(enemy)
+		enemy.global_position = spot
+		enemy.call("setup", "broker", 40.0, 2.2, door)
+		pack.append(enemy)
+	for _i in 420:
+		await get_tree().physics_frame
+	var inside := 0
+	var waiting := 0
+	for enemy in pack:
+		if not is_instance_valid(enemy):
+			continue
+		var spot := (enemy as Node3D).global_position
+		if spot.z > -6.7:
+			inside += 1
+		elif spot.z < -7.2:
+			waiting += 1
+		enemy.set_physics_process(false)
+	body.set_physics_process(true)
+	return {"ok": inside >= 2 and waiting < 4, "inside": inside, "waiting": waiting}
+
+func _smoke_view(body: CharacterBody3D) -> Dictionary:
+	var door: Node = null
+	for node in get_tree().get_nodes_in_group("barricades"):
+		if absf((node as Node3D).global_position.x) < 0.2:
+			door = node
+			break
+	if door == null:
+		return {"ok": false, "rifle": false, "pistol": false}
+	door.set("boards", int(door.get("max_boards")))
+	door.call("_rebuild")
+	body.global_position = Vector3(0.0, 0.2, -6.5)
+	body.velocity = Vector3.ZERO
+	body.rotation = Vector3.ZERO
+	body.get_node("Head").rotation = Vector3.ZERO
+	var rifle := await _smoke_muzzle_clear(body, "rent_rifle")
+	var pistol := await _smoke_muzzle_clear(body, "pipe_pistol")
+	return {"ok": rifle and pistol, "rifle": rifle, "pistol": pistol}
+
+func _smoke_muzzle_clear(body: CharacterBody3D, id: String) -> bool:
+	body.call("give_weapon", id, 1, false)
+	for _i in 3:
+		await get_tree().process_frame
+	var cam := body.get_node("Head/Camera3D") as Camera3D
+	var tip: Vector3 = body.call("_barrel_tip", 0)
+	var rel := tip - cam.global_position
+	if rel.length() < 0.3:
+		return false
+	var query := PhysicsRayQueryParameters3D.create(cam.global_position, cam.global_position + rel.normalized() * 4.0)
+	query.collision_mask = 1
+	query.exclude = [body]
+	var hit := body.get_world_3d().direct_space_state.intersect_ray(query)
+	if hit.is_empty():
+		return false
+	var hit_dist := cam.global_position.distance_to(hit.position)
+	return hit_dist < rel.length() - 0.05 and hit_dist > rel.length() * 0.18 + 0.05
+
+func _boards_shot() -> void:
+	get_window().mode = Window.MODE_WINDOWED
+	get_window().size = Vector2i(1280, 720)
+	await get_tree().process_frame
+	GameState.begin_match()
+	await get_tree().process_frame
+	for _i in 20:
+		await get_tree().physics_frame
+	var body := get_tree().get_first_node_in_group("player") as CharacterBody3D
+	var door: Node = null
+	for node in get_tree().get_nodes_in_group("barricades"):
+		if absf((node as Node3D).global_position.x) < 0.2:
+			door = node
+			break
+	door.set("boards", int(door.get("max_boards")))
+	door.call("_rebuild")
+	body.global_position = Vector3(0.0, 0.2, -6.5)
+	body.velocity = Vector3.ZERO
+	body.rotation = Vector3.ZERO
+	body.get_node("Head").rotation = Vector3.ZERO
+	var dir := OS.get_environment("TEMP").path_join("stonks_shots")
+	DirAccess.make_dir_recursive_absolute(dir)
+	for id in ["rent_rifle", "pipe_pistol"]:
+		body.call("give_weapon", id, 1, false)
+		for _i in 8:
+			await get_tree().process_frame
+		var img := (body.get_node("Head/Camera3D") as Camera3D).get_viewport().get_texture().get_image()
+		img.save_png(dir.path_join("board_%s.png" % id))
+		print("BOARD_SHOT %s" % id)
+	get_tree().quit()
+
+func _smoke_down(body: CharacterBody3D) -> Dictionary:
+	body.call("take_damage", 10000.0)
+	for _i in 65:
+		await get_tree().physics_frame
+	var camera := body.get_node("Head/Camera3D") as Camera3D
+	var dy := camera.global_position.y - body.global_position.y
+	var roll := rad_to_deg(camera.rotation.z)
+	var posed := absf(dy) <= 0.6 and absf(roll) > 45.0
+	for _i in 150:
+		await get_tree().physics_frame
+	return {"ok": posed and GameState.over, "dy": dy, "roll": roll, "over": GameState.over}
 
 func _audit() -> void:
 	await get_tree().process_frame

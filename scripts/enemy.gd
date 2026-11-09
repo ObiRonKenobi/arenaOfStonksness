@@ -10,6 +10,7 @@ const DEATH_TIME := 1.7
 const SWING := 0.7
 const IMPACT := 0.38
 const REACH := 1.15
+const STRIKE_HEIGHT := 1.4
 const TURN_RATE := 8.0
 # Capsules touch at 0.7. Followers ease off inside GAP_FAR and stop at GAP_NEAR.
 const GAP_NEAR := 0.72
@@ -240,7 +241,14 @@ func _weave(dir: Vector3, delta: float, dist: float) -> Vector3:
 	var lurch := lerpf(1.0, 0.72 + 0.28 * absf(sin(_wander_phase * 0.7)), fade)
 	return (dir + side * sway).normalized() * lurch
 
+func _floor_apart(player: Node3D) -> bool:
+	return absf(player.global_position.y - global_position.y) > STRIKE_HEIGHT
+
 func _surround_slot(player: Node3D, delta: float) -> Vector3:
+	if _floor_apart(player):
+		_flank_on = false
+		_outer = false
+		return Vector3.ZERO
 	var from := global_position - player.global_position
 	from.y = 0.0
 	var dist := from.length()
@@ -295,12 +303,12 @@ func _open_to(player: Node3D) -> bool:
 	query.exclude = [self, player]
 	return space.intersect_ray(query).is_empty()
 
-func _horde_pace(dir: Vector3, target: Vector3) -> float:
+func _horde_pace(dir: Vector3, target: Vector3, along_path: bool = true) -> float:
 	# Followers ease off behind whoever is closer to the goal. A hard stop and go flickers the walk.
 	if dir.length() < 0.01:
 		return 1.0
 	var heading := Vector3(dir.x, 0.0, dir.z).normalized()
-	var my_rank := _rank_to(target)
+	var my_rank := _goal_rank(target, along_path)
 	var pace := 1.0
 	for other in get_tree().get_nodes_in_group("enemies"):
 		var body := other as CharacterBody3D
@@ -319,7 +327,7 @@ func _horde_pace(dir: Vector3, target: Vector3) -> float:
 			continue
 		if offset.dot(heading) < dist * 0.35:
 			continue
-		if body._rank_to(target) < my_rank:
+		if body._goal_rank(target, along_path) < my_rank:
 			pace = minf(pace, smoothstep(GAP_NEAR, GAP_FAR, dist))
 	return pace
 
@@ -327,9 +335,9 @@ func _ease_pace(goal: float, delta: float) -> void:
 	var rate := 6.0 if goal < _pace else 3.0
 	_pace = move_toward(_pace, goal, rate * delta)
 
-func _aside_for(heading: Vector3, target: Vector3) -> Vector3:
+func _aside_for(heading: Vector3, target: Vector3, along_path: bool = true) -> Vector3:
 	# A worse-ranked body planted in a closer enemy's line corks the window. Step off it.
-	var my_rank := _rank_to(target)
+	var my_rank := _goal_rank(target, along_path)
 	for other in get_tree().get_nodes_in_group("enemies"):
 		var body := other as CharacterBody3D
 		if body == null or body == self or body._dead or body.collision_layer == 0:
@@ -339,7 +347,7 @@ func _aside_for(heading: Vector3, target: Vector3) -> Vector3:
 		var dist := to_me.length()
 		if dist > GAP_NEAR or dist < 0.001:
 			continue
-		if body._rank_to(target) >= my_rank:
+		if body._goal_rank(target, along_path) >= my_rank:
 			continue
 		var aim := target - body.global_position
 		aim.y = 0.0
@@ -479,8 +487,12 @@ func _climb_through_window(delta: float) -> void:
 			return
 		if not _at_sill(gap):
 			var dir := flat.normalized()
-			var goal := _horde_pace(dir, lip)
-			var aside := _aside_for(dir, lip)
+			var nearest := _nearest_lip(lip)
+			var goal := 1.0
+			var aside := Vector3.ZERO
+			if not nearest:
+				goal = _horde_pace(dir, lip, false)
+				aside = _aside_for(dir, lip, false)
 			if aside != Vector3.ZERO:
 				dir = aside
 				goal = maxf(goal, 0.8)
@@ -497,7 +509,7 @@ func _climb_through_window(delta: float) -> void:
 			if gap > 1.2:
 				_sync_clip(Vector2(velocity.x, velocity.z).length() > 0.25, false)
 			var moved := Vector2(global_position.x - before.x, global_position.z - before.z).length()
-			if _pace > 0.5 and gap <= 1.0 and moved < speed * _slow * delta * 0.35:
+			if gap <= 1.2 and moved < speed * _slow * delta * 0.35:
 				_lip_stuck += delta
 			else:
 				_lip_stuck = 0.0
@@ -608,6 +620,8 @@ func _land_hit(player: Node3D) -> void:
 	player.call("take_damage", attack)
 
 func _in_strike(player: Node3D) -> bool:
+	if _floor_apart(player):
+		return false
 	var to := player.global_position - global_position
 	to.y = 0.0
 	var dist := to.length()
@@ -665,6 +679,9 @@ func _refresh_chase(player: Node3D, delta: float) -> void:
 func _on_final_leg() -> bool:
 	if _agent == null or _door_fight():
 		return true
+	var player := get_tree().get_first_node_in_group("player") as Node3D
+	if player != null and _floor_apart(player):
+		return false
 	if _agent.is_navigation_finished():
 		return true
 	var path := _agent.get_current_navigation_path()
@@ -672,6 +689,25 @@ func _on_final_leg() -> bool:
 		return false
 	var idx := _agent.get_current_navigation_path_index()
 	return path.size() - idx <= 1
+
+func _goal_rank(target: Vector3, along_path: bool) -> float:
+	if along_path:
+		return _rank_to(target)
+	var flat := target - global_position
+	flat.y = 0.0
+	return flat.length()
+
+func _nearest_lip(lip: Vector3) -> bool:
+	var mine := _goal_rank(lip, false)
+	for other in get_tree().get_nodes_in_group("enemies"):
+		var body := other as CharacterBody3D
+		if body == null or body == self or body._dead or body._door != _door:
+			continue
+		if body._climb_phase > 0:
+			continue
+		if body._goal_rank(lip, false) + 0.05 < mine:
+			return false
+	return true
 
 func _rank_to(target: Vector3) -> float:
 	var along := _path_left()

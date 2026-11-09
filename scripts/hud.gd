@@ -18,6 +18,7 @@ var _menu_page: Control
 var _page_title: Label
 var _page_body: Label
 var _page_open := false
+var _down_tint: ColorRect
 
 func _ready() -> void:
 	add_to_group("hud")
@@ -46,6 +47,15 @@ func _process(delta: float) -> void:
 		_toast_time -= delta
 		if _toast_time <= 0.0:
 			_toast.text = ""
+	var player := get_tree().get_first_node_in_group("player")
+	var downed := player != null and bool(player.get("_downed"))
+	var amount := 0.0
+	if player != null:
+		amount = clampf(float(player.get("_down_t")), 0.0, 1.0)
+	if _down_tint:
+		_down_tint.color = Color(0.42, 0.0, 0.02, 0.55 * amount)
+	if _crosshair:
+		_crosshair.visible = GameState.running and not downed and _menu != null and not _menu.visible
 
 func set_prompt(text: String) -> void:
 	_prompt.text = text
@@ -181,6 +191,11 @@ func _build_menu() -> void:
 	_menu_page.add_child(back)
 
 func _build_over() -> void:
+	_down_tint = ColorRect.new()
+	_down_tint.color = Color(0.42, 0.0, 0.02, 0.0)
+	_down_tint.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_down_tint.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(_down_tint)
 	_over = ColorRect.new()
 	_over.visible = false
 	_over.color = Color(0.08, 0.02, 0.02, 0.8)

@@ -27,10 +27,14 @@ const SHOT_SCI_GUN := preload("res://assets/audio/sci_gunshot.mp3")
 const FLASH_GUN := preload("res://assets/fx/muzzle_gun.png")
 const FLASH_LASER := preload("res://assets/fx/muzzle_laser.png")
 const MOUSE_SENS := 0.0022
+const VIEWMODEL_SHADER := preload("res://shaders/viewmodel.gdshader")
 const GRAVITY := 20.0
 const JUMP_SPEED := 6.2
 const STEP_HEIGHT := 0.45
 const BOARD_HOLD := 0.8
+const DOWN_TIME := 0.8
+const SPRINT_SPEED := 1.4
+const SPRINT_FOV := 6.0
 
 var health := 100.0
 var max_health := 100.0
@@ -61,6 +65,11 @@ var yaw := 0.0
 var pitch := 0.0
 var _gun_mount: Node3D
 var _aim := 0.0
+var _sprint := 0.0
+var _down_t := 0.0
+var _focus := ""
+var _aim_was := false
+var _sprint_was := false
 var _gunshot: AudioStreamPlayer
 var _reload_sfx: AudioStreamPlayer
 var _view_anims: Array[AnimationPlayer] = []
@@ -138,6 +147,8 @@ func _physics_process(delta: float) -> void:
 		return
 	if _downed:
 		_bleed -= delta
+		_down_t = minf(1.0, _down_t + delta / DOWN_TIME)
+		_pose_down(_down_t)
 		if _bleed <= 0.0:
 			GameState.fail()
 		return
@@ -175,8 +186,11 @@ func _physics_process(delta: float) -> void:
 	wish.y = 0.0
 	if wish.length() > 0.01:
 		wish = wish.normalized()
-	var aiming := Input.is_action_pressed("aim") and _reload <= 0.0 and not _akimbo()
+	_track_focus()
+	var aiming := _focus == "aim" and _reload <= 0.0 and not _akimbo()
 	_aim = move_toward(_aim, 1.0 if aiming else 0.0, delta * 7.0)
+	var sprinting := _focus == "sprint" and Input.is_action_pressed("move_forward") and not Input.is_action_pressed("move_back")
+	_sprint = move_toward(_sprint, 1.0 if sprinting else 0.0, delta * 7.0)
 	if _gun_mount:
 		var hip := Vector3(0.0, -0.14, -0.30) if _akimbo() else HIP_GUN
 		var held := hip if _akimbo() else hip.lerp(ADS_GUN, _aim)
@@ -185,8 +199,10 @@ func _physics_process(delta: float) -> void:
 			reloading = sin(clampf(1.0 - _reload / 1.15, 0.0, 1.0) * PI)
 		_gun_mount.position = held.lerp(RELOAD_GUN, reloading)
 		_gun_mount.rotation_degrees.x = lerpf(0.0, 35.0, reloading)
-	camera.fov = lerpf(HIP_FOV, _ads_fov(), _aim)
+	camera.fov = lerpf(HIP_FOV + SPRINT_FOV * _sprint, _ads_fov(), _aim)
 	var speed := SPEED * (1.45 if ult_active == "punk" else 1.0) * lerpf(1.0, 0.72, _aim)
+	if sprinting:
+		speed *= SPRINT_SPEED
 	velocity.x = wish.x * speed
 	velocity.z = wish.z * speed
 	if is_on_floor():
@@ -202,6 +218,41 @@ func _physics_process(delta: float) -> void:
 	_tick_board(delta)
 	_tick_muzzle(delta)
 	_update_prompt()
+
+func _track_focus() -> void:
+	var aim_held := Input.is_action_pressed("aim")
+	var sprint_held := Input.is_action_pressed("sprint")
+	var aim_just := Input.is_action_just_pressed("aim") or (aim_held and not _aim_was)
+	var sprint_just := Input.is_action_just_pressed("sprint") or (sprint_held and not _sprint_was)
+	_aim_was = aim_held
+	_sprint_was = sprint_held
+	if aim_just and not _akimbo():
+		_focus = "aim"
+	if sprint_just:
+		_focus = "sprint"
+	if _focus == "aim" and (not aim_held or _akimbo()):
+		_focus = "sprint" if sprint_held else ""
+	elif _focus == "sprint" and not sprint_held:
+		_focus = "aim" if aim_held and not _akimbo() else ""
+
+func _pose_down(amount: float) -> void:
+	var t := clampf(amount, 0.0, 1.0)
+	var land := 0.82
+	var shaped := 0.0
+	if t <= land:
+		var u := t / land
+		shaped = u * u * 1.04
+	else:
+		var w := (t - land) / (1.0 - land)
+		shaped = lerpf(1.04, 1.0, w * w * (3.0 - 2.0 * w))
+	head.position.y = lerpf(1.55, 0.35, shaped)
+	camera.rotation.x = deg_to_rad(10.0) * shaped
+	camera.rotation.z = deg_to_rad(-75.0) * shaped
+	if _gun_mount == null:
+		return
+	var rest := Vector3(0.0, -0.14, -0.30) if _akimbo() else HIP_GUN
+	_gun_mount.position = rest + Vector3(0.0, -1.15 * shaped, 0.0)
+	_gun_mount.rotation_degrees.x = 0.0
 
 func take_damage(amount: float) -> void:
 	if _downed or _nap_invuln or not GameState.running:
@@ -1327,7 +1378,7 @@ func _spawn_arm(packed: PackedScene, arms: Dictionary, spread: float, mirror: bo
 	elif weapon_id == "pipe_pistol" and weapon_tier == 2:
 		_seat_held(rig, "res://assets/weapons/pistol_v2.glb", Vector3(1, 0, 0), Vector3(0, 1, 0), 0.52, "glock")
 	elif weapon_id == "street_smg" and weapon_tier >= 3:
-		_seat_held(rig, "res://assets/weapons/smg_v3.glb", Vector3(1, 0, 0), Vector3(0, 1, 0), 0.95, "akm", 0.3, true, 0.25, false, true, 0.04)
+		_seat_held(rig, "res://assets/weapons/smg_v3.glb", Vector3(1, 0, 0), Vector3(0, 1, 0), 1.12, "akm", 0.3, true, 0.25, false, true, 0.04)
 	elif weapon_id == "street_smg" and weapon_tier == 2:
 		_seat_held(rig, "res://assets/weapons/smg.glb", Vector3(1, 0, 0), Vector3(0, 1, 0), 0.55, "glock", 0.34, true, 0.0, true, false, -0.055, 0.03)
 	elif weapon_id == "street_smg":
@@ -1335,15 +1386,19 @@ func _spawn_arm(packed: PackedScene, arms: Dictionary, spread: float, mirror: bo
 	elif weapon_id == "debt_shotgun" and weapon_tier >= 3:
 		_seat_held(rig, "res://assets/weapons/shotgun_v3.glb", Vector3(1, 0, 0), Vector3(0, 1, 0), 1.25, "akm", 0.32, true, 0.0)
 	elif weapon_id == "debt_shotgun" and weapon_tier == 2:
-		_seat_held(rig, "res://assets/weapons/shotgun_v2.glb", Vector3(1, 0, 0), Vector3(0, 1, 0), 1.05, "akm", 0.3, true, 0.7)
+		_seat_held(rig, "res://assets/weapons/shotgun_v2.glb", Vector3(1, 0, 0), Vector3(0, 1, 0), 1.12, "akm", 0.035, true, 0.0, false, true, 0.125)
 	elif weapon_id == "debt_shotgun":
-		_seat_held(rig, "res://assets/weapons/mossberg.glb", Vector3(1, 0, 0), Vector3(0, 1, 0), 1.35, "akm", 0.3, true, 0.0)
+		_seat_held(rig, "res://assets/weapons/mossberg.glb", Vector3(1, 0, 0), Vector3(0, 1, 0), 1.55, "akm", 0.3, true, 0.0)
 	elif weapon_id == "rent_rifle" and weapon_tier >= 3:
 		_seat_held(rig, "res://assets/weapons/rifle_v3.glb", Vector3(1, 0, 0), Vector3(0, 1, 0), 1.15, "akm", 0.34, true, 0.7, false, false)
 	elif weapon_id == "rent_rifle" and weapon_tier < 2:
 		_seat_held(rig, "res://assets/weapons/rifle.glb", Vector3(0, 0, -1), Vector3(0, 1, 0), 1.15, "akm", 0.34, true, 0.25)
 	if _akimbo():
 		_collapse_support_hand(rig)
+	if weapon_id == "rent_rifle" and weapon_tier >= 3:
+		_plant_support_hand(rig, Vector3(-0.040, 0.032, 0.0))
+	elif weapon_id == "debt_shotgun" and weapon_tier == 2:
+		_plant_support_hand(rig, Vector3(0.0, -0.03, 0.0))
 	pivot.position.x = _aim_nudge()
 	_register_muzzle(rig)
 	if weapon_id == "street_smg" and weapon_tier == 2:
@@ -1384,6 +1439,16 @@ func _collapse_support_hand(rig: Node3D) -> void:
 		if skeleton.find_bone("UpperArm.L") < 0:
 			continue
 		var modifier := preload("res://scripts/collapse_left_arm.gd").new() as SkeletonModifier3D
+		skeleton.add_child(modifier)
+
+func _plant_support_hand(rig: Node3D, shift: Vector3, roll: float = 0.0) -> void:
+	for node in rig.find_children("*", "Skeleton3D", true, false):
+		var skeleton := node as Skeleton3D
+		if skeleton.find_bone("UpperArm.L") < 0:
+			continue
+		var modifier := preload("res://scripts/plant_left_arm.gd").new()
+		modifier.shift = shift
+		modifier.roll = roll
 		skeleton.add_child(modifier)
 
 func _aim_nudge() -> float:
@@ -1585,15 +1650,20 @@ func _color_viewmodel(node: Node) -> void:
 	if mesh_inst.mesh == null:
 		return
 	mesh_inst.material_override = null
+	mesh_inst.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	for surface in mesh_inst.mesh.get_surface_count():
-		var flat := StandardMaterial3D.new()
-		flat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-		flat.cull_mode = BaseMaterial3D.CULL_DISABLED
+		var flat := ShaderMaterial.new()
+		flat.shader = VIEWMODEL_SHADER
+		var tint := Color.WHITE
+		var tex: Texture2D = null
 		var source := mesh_inst.get_active_material(surface)
 		if source is BaseMaterial3D:
 			var base := source as BaseMaterial3D
-			flat.albedo_color = base.albedo_color
-			flat.albedo_texture = base.albedo_texture
+			tint = base.albedo_color
+			tex = base.albedo_texture
+		flat.set_shader_parameter("albedo", tint)
+		if tex != null:
+			flat.set_shader_parameter("albedo_tex", tex)
 		mesh_inst.set_surface_override_material(surface, flat)
 
 func _view_clip(anim: AnimationPlayer, kind: String) -> String:
@@ -1662,8 +1732,9 @@ func _ensure_inputs() -> void:
 	_bind("jump", KEY_SPACE)
 	_bind("weapon_1", KEY_1)
 	_bind("weapon_2", KEY_2)
+	_bind("sprint", KEY_SHIFT, KEY_LOCATION_LEFT)
 
-func _bind(action: String, code: int) -> void:
+func _bind(action: String, code: int, location: KeyLocation = KEY_LOCATION_UNSPECIFIED) -> void:
 	if not InputMap.has_action(action):
 		InputMap.add_action(action)
 	if not InputMap.action_get_events(action).is_empty():
@@ -1675,4 +1746,5 @@ func _bind(action: String, code: int) -> void:
 		return
 	var event := InputEventKey.new()
 	event.physical_keycode = code as Key
+	event.location = location
 	InputMap.action_add_event(action, event)

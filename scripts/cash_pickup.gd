@@ -1,9 +1,13 @@
 extends Area3D
 
 const PICKUP_SFX := preload("res://assets/audio/cash_pickup.wav")
+const GRAVITY := 20.0
+const MAX_FALL := 20.0
 
 var amount := 40
 var kind := "cash"
+var _floor_y := NAN
+var _fall_speed := 0.0
 
 func _ready() -> void:
 	body_entered.connect(_on_body)
@@ -15,6 +19,7 @@ func _ready() -> void:
 	var box := BoxShape3D.new()
 	box.size = Vector3(0.42, 0.28, 0.28)
 	shape.shape = box
+	shape.position.y = box.size.y * 0.5
 	add_child(shape)
 	var tint := Color(0.16, 0.55, 0.28)
 	var mark_text := ""
@@ -36,7 +41,7 @@ func _ready() -> void:
 		var slab := BoxMesh.new()
 		slab.size = Vector3(0.36, 0.035, 0.18)
 		bill.mesh = slab
-		bill.position = Vector3(0.0, 0.03 + float(i) * 0.04, 0.0)
+		bill.position = Vector3(0.0, slab.size.y * 0.5 + float(i) * 0.04, 0.0)
 		bill.rotation.y = deg_to_rad(-8.0 if i % 2 == 0 else 6.0)
 		var mat := StandardMaterial3D.new()
 		mat.albedo_color = tint.lerp(Color(0.9, 0.9, 0.8), float(i) * 0.12)
@@ -54,6 +59,30 @@ func _ready() -> void:
 	mark.outline_size = 8
 	mark.outline_modulate = Color(0.05, 0.04, 0.03)
 	add_child(mark)
+
+func _physics_process(delta: float) -> void:
+	if is_nan(_floor_y):
+		_floor_y = _find_floor()
+	_fall_speed += GRAVITY * delta
+	var y := global_position.y - _fall_speed * delta
+	if y <= _floor_y:
+		y = _floor_y
+		set_physics_process(false)
+	global_position.y = y
+
+func _find_floor() -> float:
+	var skip: Array[RID] = []
+	for group in ["player", "barricades"]:
+		for node in get_tree().get_nodes_in_group(group):
+			if node is CollisionObject3D:
+				skip.append((node as CollisionObject3D).get_rid())
+	var query := PhysicsRayQueryParameters3D.create(global_position + Vector3.UP * 0.3, global_position + Vector3.DOWN * MAX_FALL)
+	query.collision_mask = 1
+	query.exclude = skip
+	var hit := get_world_3d().direct_space_state.intersect_ray(query)
+	if hit.is_empty():
+		return global_position.y
+	return (hit.position as Vector3).y
 
 func _add_cross() -> void:
 	var mat := StandardMaterial3D.new()
