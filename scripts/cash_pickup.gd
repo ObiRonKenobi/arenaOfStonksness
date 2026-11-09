@@ -107,13 +107,34 @@ func _on_body(body: Node) -> void:
 	if not body.is_in_group("player"):
 		return
 	if kind == "health" and body.has_method("heal"):
+		if body.has_method("needs_health") and not body.call("needs_health"):
+			return
 		body.call("heal", 45.0)
+		queue_free()
+		return
 	elif kind == "ammo" and body.has_method("refill_weapon"):
-		body.call("refill_weapon", str(body.get("weapon_id")))
+		var held := str(body.get("weapon_id"))
+		if body.has_method("weapon_needs_ammo") and not body.call("weapon_needs_ammo", held):
+			return
+		body.call("refill_weapon", held)
+		if body.has_method("note_ammo"):
+			body.call("note_ammo")
+		queue_free()
+		return
 	elif kind == "full":
+		var anyone := false
+		for player in get_tree().get_nodes_in_group("player"):
+			if player.has_method("carried_needs_ammo") and player.call("carried_needs_ammo"):
+				anyone = true
+				break
+		if not anyone:
+			return
 		for player in get_tree().get_nodes_in_group("player"):
 			if player.has_method("refill_carried_ammo"):
 				player.call("refill_carried_ammo")
+		GameState.share_ammo()
+		queue_free()
+		return
 	elif body.has_method("add_cash"):
 		body.call("add_cash", amount)
 	else:

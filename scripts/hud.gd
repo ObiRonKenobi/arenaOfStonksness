@@ -11,6 +11,11 @@ var _menu: Control
 var _over: Control
 var _over_label: Label
 var _toast_time := 0.0
+var _hurt := 0.0
+var _heal := 0.0
+var _supply := 0.0
+var _supply_color := Color(0.72, 0.55, 0.08)
+var _health_seen := -1.0
 var _crosshair: Label
 var _hail: Label
 var _menu_home: Control
@@ -19,6 +24,8 @@ var _page_title: Label
 var _page_body: Label
 var _page_open := false
 var _down_tint: ColorRect
+var _heal_tint: ColorRect
+var _supply_tint: ColorRect
 
 func _ready() -> void:
 	add_to_group("hud")
@@ -33,6 +40,7 @@ func _ready() -> void:
 		player.connect("ammo_changed", func(): _on_ammo(player))
 		player.connect("ult_changed", _on_ult)
 		player.connect("weapon_changed", func(): _on_ammo(player))
+		player.connect("ammo_for_me", _on_my_ammo)
 		_on_health(float(player.get("health")), float(player.get("max_health")))
 		_on_cash(int(player.get("cash")))
 		_on_ammo(player)
@@ -40,6 +48,7 @@ func _ready() -> void:
 	GameState.round_changed.connect(func(index): _wave.text = "Wave %d" % index)
 	GameState.toast_requested.connect(show_toast)
 	GameState.king_hail.connect(_on_hail)
+	GameState.ammo_shared.connect(_on_shared_ammo)
 	GameState.game_over.connect(_on_over)
 
 func _process(delta: float) -> void:
@@ -52,8 +61,19 @@ func _process(delta: float) -> void:
 	var amount := 0.0
 	if player != null:
 		amount = clampf(float(player.get("_down_t")), 0.0, 1.0)
+	if _hurt > 0.0:
+		_hurt = maxf(0.0, _hurt - delta)
+	if _heal > 0.0:
+		_heal = maxf(0.0, _heal - delta)
+	if _supply > 0.0:
+		_supply = maxf(0.0, _supply - delta)
 	if _down_tint:
-		_down_tint.color = Color(0.42, 0.0, 0.02, 0.55 * amount)
+		var flash := 0.5 * _hurt / 0.75
+		_down_tint.color = Color(0.42, 0.0, 0.02, maxf(0.55 * amount, flash))
+	if _heal_tint:
+		_heal_tint.color = Color(0.05, 0.45, 0.12, 0.5 * _heal / 0.75)
+	if _supply_tint:
+		_supply_tint.color = Color(_supply_color.r, _supply_color.g, _supply_color.b, 0.5 * _supply / 0.75)
 	if _crosshair:
 		_crosshair.visible = GameState.running and not downed and _menu != null and not _menu.visible
 
@@ -64,8 +84,38 @@ func show_toast(text: String) -> void:
 	_toast.text = text
 	_toast_time = 2.4
 
+func _on_my_ammo() -> void:
+	_flash_supply(Color(0.72, 0.55, 0.08))
+
+func _on_shared_ammo() -> void:
+	_flash_supply(Color(0.42, 0.12, 0.62))
+
+func _flash_supply(color: Color) -> void:
+	_supply = 0.75
+	_supply_color = color
+	_play_sting("res://assets/audio/ammo_reload.mp3")
+
 func _on_health(current: float, maximum: float) -> void:
 	_health.text = "Health %d / %d" % [int(current), int(maximum)]
+	if _health_seen >= 0.0 and current < _health_seen:
+		_hurt = 0.75
+		_play_sting("res://assets/audio/hurt.mp3")
+	elif _health_seen >= 0.0 and current > _health_seen:
+		_heal = 0.75
+		_play_sting("res://assets/audio/healing.mp3")
+	_health_seen = current
+
+func _play_sting(path: String) -> void:
+	var stream := load(path) as AudioStream
+	if stream == null:
+		return
+	var player := AudioStreamPlayer.new()
+	player.stream = stream
+	player.volume_db = -4.0
+	player.pitch_scale = 1.0
+	add_child(player)
+	player.finished.connect(player.queue_free)
+	player.play()
 
 func _on_cash(amount: int) -> void:
 	_cash.text = "$%d" % amount
@@ -196,6 +246,16 @@ func _build_over() -> void:
 	_down_tint.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_down_tint.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(_down_tint)
+	_heal_tint = ColorRect.new()
+	_heal_tint.color = Color(0.05, 0.45, 0.12, 0.0)
+	_heal_tint.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_heal_tint.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(_heal_tint)
+	_supply_tint = ColorRect.new()
+	_supply_tint.color = Color(0.72, 0.55, 0.08, 0.0)
+	_supply_tint.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_supply_tint.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(_supply_tint)
 	_over = ColorRect.new()
 	_over.visible = false
 	_over.color = Color(0.08, 0.02, 0.02, 0.8)
@@ -238,11 +298,24 @@ func _close_page() -> void:
 func _on_hail() -> void:
 	_hail.visible = true
 	_hail.text = "Hail to the King, Baby!"
+	_play_hail()
 	var timer := get_tree().create_timer(2.2)
 	timer.timeout.connect(func():
 		if is_instance_valid(_hail):
 			_hail.visible = false
 	)
+
+func _play_hail() -> void:
+	var stream := load("res://assets/audio/hail_king.mp3") as AudioStream
+	if stream == null:
+		return
+	var player := AudioStreamPlayer.new()
+	player.stream = stream
+	player.volume_db = -4.0
+	player.pitch_scale = 1.0
+	add_child(player)
+	player.finished.connect(player.queue_free)
+	player.play()
 
 func _menu_click(event: InputEvent) -> void:
 	if _page_open:

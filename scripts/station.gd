@@ -41,7 +41,7 @@ func _ready() -> void:
 	_label.text = _title()
 	_label.font_size = 42
 	_label.position = Vector3(0, 1.7, 0.1)
-	_label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	_label.billboard = BaseMaterial3D.BILLBOARD_DISABLED
 	_label.modulate = Color(1, 0.95, 0.8)
 	_label.outline_size = 8
 	add_child(_label)
@@ -156,7 +156,8 @@ func _model_path() -> Array:
 	if kind == "wall" and WALL_GUN.has(weapon_id):
 		return WALL_GUN[weapon_id]
 	if kind == "perk" and PERK_PATH.has(perk_id):
-		return [PERK_PATH[perk_id], 0.0]
+		var yaw := -90.0 if perk_id == "rapid_fire" else 0.0
+		return [PERK_PATH[perk_id], yaw]
 	if PROP_PATH.has(kind):
 		var yaw := 0.0
 		if kind == "planks":
@@ -206,7 +207,10 @@ func _mount_model() -> bool:
 		var mount_y := 1.55 - ext.y * 0.5
 		holder.position = Vector3(0, mount_y, ext.z * 0.5)
 		_set_hit(Vector3(maxf(ext.x, 0.55), maxf(ext.y, 0.35) + 0.15, maxf(ext.z, 0.2)), Vector3(0, mount_y, ext.z * 0.5))
-		_label.position = Vector3(0, mount_y + ext.y * 0.5 + 0.18, ext.z + 0.02)
+		if kind == "perk":
+			_label.position = Vector3(0, mount_y + ext.y * 0.5 + 0.18, 0.04)
+		else:
+			_label.position = Vector3(0, mount_y + ext.y * 0.5 + 0.18, ext.z + 0.02)
 	elif floor_shop:
 		var into_room := 0.0
 		if kind == "planks":

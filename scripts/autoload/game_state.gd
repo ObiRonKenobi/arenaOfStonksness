@@ -7,6 +7,7 @@ signal rounds_cleared_changed(count: int)
 signal game_over(rounds_survived: int)
 signal toast_requested(text: String)
 signal king_hail
+signal ammo_shared
 
 var round_index := 0
 var rounds_cleared := 0
@@ -73,3 +74,6 @@ func toast(text: String) -> void:
 
 func hail_king() -> void:
 	king_hail.emit()
+
+func share_ammo() -> void:
+	ammo_shared.emit()

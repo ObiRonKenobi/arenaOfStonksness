@@ -4,6 +4,28 @@ signal died
 
 const HIT_SFX := preload("res://assets/audio/body_hit.wav")
 const MOAN_SFX := preload("res://assets/audio/horde_moan.wav")
+const LINE_PATHS := [
+	"res://assets/audio/just_business.mp3",
+	"res://assets/audio/on_the_list.mp3",
+	"res://assets/audio/dont_make_schedule.mp3",
+	"res://assets/audio/couldve_been_email.mp3",
+	"res://assets/audio/q3_optimization.mp3",
+	"res://assets/audio/clear_memo.mp3",
+	"res://assets/audio/feedback_noted.mp3",
+	"res://assets/audio/relocation.mp3",
+	"res://assets/audio/we_are_helping.mp3",
+]
+const KING_LINE_PATHS := [
+	"res://assets/audio/my_father.mp3",
+	"res://assets/audio/jewish_lawyer.mp3",
+	"res://assets/audio/someone_handle.mp3",
+	"res://assets/audio/paid_for.mp3",
+	"res://assets/audio/life_valuation.mp3",
+	"res://assets/audio/tax_bracket.mp3",
+	"res://assets/audio/im_telling.mp3",
+	"res://assets/audio/hate_stairs.mp3",
+	"res://assets/audio/expensive_outfit.mp3",
+]
 const GRAVITY := 20.0
 const STEP_HEIGHT := 0.45
 const DEATH_TIME := 1.7
@@ -69,6 +91,8 @@ var _climb_phase := 0
 var _climb_t := 0.0
 var _climb_from := Vector3.ZERO
 var _lip_stuck := 0.0
+var _stuck := 0.0
+var _lane_flip := false
 var _model: Node3D
 var _anim: AnimationPlayer
 var _clip := ""
@@ -90,6 +114,9 @@ var _walk_hold := 0.0
 var _agent: NavigationAgent3D
 var _chase_at := Vector3(9999, 9999, 9999)
 var _chase_wait := 0.0
+var _line_wait := 0.0
+var _lines: Array[AudioStream] = []
+var _line_voice: AudioStreamPlayer3D
 
 func _ready() -> void:
 	add_to_group("enemies")
@@ -106,6 +133,7 @@ func _ready() -> void:
 	_agent.path_desired_distance = 0.45
 	_agent.target_desired_distance = 0.5
 	add_child(_agent)
+	_line_wait = randf_range(1.5, 4.0)
 
 func setup(kind: String, health: float, move_speed: float, door: Node3D) -> void:
 	archetype = kind
@@ -118,6 +146,7 @@ func setup(kind: String, health: float, move_speed: float, door: Node3D) -> void
 			_suit_name = _pick_suit()
 		"king":
 			attack = 16.0
+	_load_lines(KING_LINE_PATHS if kind == "king" else LINE_PATHS)
 	_wear_model()
 	_voice(MOAN_SFX, -10.0)
 
@@ -128,6 +157,7 @@ func _physics_process(delta: float) -> void:
 		if _death_t <= 0.0:
 			queue_free()
 		return
+	_tick_line(delta)
 	_cool = maxf(0.0, _cool - delta)
 	_lock = maxf(0.0, _lock - delta)
 	_steer_t = maxf(0.0, _steer_t - delta)
@@ -177,7 +207,10 @@ func _physics_process(delta: float) -> void:
 	if not attacking_door:
 		var dir := target - global_position
 		dir.y = 0.0
-		if player and not _door_fight():
+		var gate := _crossing_gate(target) if player and not _door_fight() else null
+		if gate != null:
+			_flank_on = false
+		elif player and not _door_fight():
 			var slot := _surround_slot(player, delta)
 			if _flank_on:
 				dir = slot
@@ -191,15 +224,22 @@ func _physics_process(delta: float) -> void:
 			var dist := dir.length()
 			if player and not _door_fight():
 				dist = global_position.distance_to(player.global_position)
-			if _on_final_leg() and not _flank_on:
+			if _on_final_leg() and not _flank_on and gate == null and not _on_stairs():
 				dir = _weave(dir.normalized(), delta, dist)
 			else:
 				dir = dir.normalized()
-			if _steer_t > 0.0 and _steer_normal.length() > 0.1:
+			if _on_stairs() and gate == null:
+				var side := Vector3(_stair_lane_x() - global_position.x, 0.0, 0.0)
+				dir = (dir + side * 1.6).normalized()
+			elif _steer_t > 0.0 and _steer_normal.length() > 0.1 and gate == null:
 				dir = _slide_along(_steer_normal, dir)
 			var pace_goal := _horde_pace(dir, target)
 			# A body stepping off the line still has someone ahead. Let it move sideways.
-			if _flank_on:
+			if _on_stairs():
+				pace_goal = maxf(pace_goal, 0.9)
+			elif gate != null and _nearest_opening(gate):
+				pace_goal = 1.0
+			elif _flank_on:
 				pace_goal = maxf(pace_goal, 0.8)
 			_ease_pace(pace_goal, delta)
 			velocity.x = dir.x * speed * _slow * _pace
@@ -228,6 +268,7 @@ func _physics_process(delta: float) -> void:
 	var step := Vector3(velocity.x, 0.0, velocity.z)
 	var before_pos := global_position
 	move_and_slide()
+	_note_stuck(step, before_pos, delta)
 	if step.length() > 0.2:
 		_step_up(step)
 		_note_bump(step, before_pos)
@@ -241,11 +282,125 @@ func _weave(dir: Vector3, delta: float, dist: float) -> Vector3:
 	var lurch := lerpf(1.0, 0.72 + 0.28 * absf(sin(_wander_phase * 0.7)), fade)
 	return (dir + side * sway).normalized() * lurch
 
+func _on_stairs() -> bool:
+	var p := global_position
+	if p.x < 3.6 or p.x > 8.9 or p.z < -4.3 or p.z > 5.2:
+		return false
+	if p.x >= 5.55 and p.z <= 2.8:
+		return true
+	if _agent == null:
+		return false
+	var next := _agent.get_next_path_position()
+	return next.x >= 5.4 and next.z <= 3.2
+
+func _stair_lane_x() -> float:
+	var lane := int(get_instance_id()) % 4
+	if _lane_flip:
+		lane = (lane + 2) % 4
+	return lerpf(6.15, 8.3, float(lane) / 3.0)
+
+func _note_stuck(step: Vector3, before: Vector3, delta: float) -> void:
+	var moved := Vector2(global_position.x - before.x, global_position.z - before.z).length()
+	var wanted := step.length() * delta
+	if wanted > 0.04 and moved < wanted * 0.35:
+		_stuck += delta
+	else:
+		_stuck = maxf(0.0, _stuck - delta)
+	if _stuck < 0.8:
+		return
+	_stuck = 0.0
+	_lane_flip = not _lane_flip
+	_steer_side = -1.0 if _steer_side > 0.0 else 1.0
+	var want := step
+	want.y = 0.0
+	if want.length_squared() < 0.0001:
+		want = Vector3(0.0, 0.0, -1.0)
+	_steer_normal = want.normalized()
+	_steer_t = 1.2
+
+func _window_lip() -> Vector3:
+	var out := _door_out()
+	var side := Vector3(-out.z, 0.0, out.x)
+	if side.length_squared() < 0.0001:
+		side = Vector3.RIGHT
+	else:
+		side = side.normalized()
+	var lane := 0.35 if int(get_instance_id()) % 2 == 0 else -0.35
+	if _lane_flip:
+		lane = -lane
+	var spot := _door.global_position + out * 0.95 + side * lane
+	spot.y = 0.0
+	return spot
+
 func _floor_apart(player: Node3D) -> bool:
 	return absf(player.global_position.y - global_position.y) > STRIKE_HEIGHT
 
+func _stay_on_path(player: Node3D) -> bool:
+	return _floor_apart(player) or _crosses_hole(global_position, player.global_position)
+
+func _crosses_hole(a: Vector3, b: Vector3) -> bool:
+	var span := [0.0, 1.0]
+	if not _clip_span(a.x - b.x, a.x - 5.6, span):
+		return false
+	if not _clip_span(b.x - a.x, 8.8 - a.x, span):
+		return false
+	if not _clip_span(a.z - b.z, a.z + 2.1, span):
+		return false
+	if not _clip_span(b.z - a.z, 2.1 - a.z, span):
+		return false
+	return true
+
+func _clip_span(p: float, q: float, span: Array) -> bool:
+	var t0: float = span[0]
+	var t1: float = span[1]
+	if absf(p) < 0.00001:
+		return q >= 0.0
+	var r := q / p
+	if p < 0.0:
+		if r > t1:
+			return false
+		if r > t0:
+			t0 = r
+	else:
+		if r < t0:
+			return false
+		if r < t1:
+			t1 = r
+	if t0 > t1:
+		return false
+	span[0] = t0
+	span[1] = t1
+	return true
+
+func _crossing_gate(point: Vector3) -> Node3D:
+	var here := Vector2(global_position.x, global_position.z)
+	for node in get_tree().get_nodes_in_group("gates"):
+		var gate := node as Node3D
+		if gate == null or not bool(gate.get("_open")):
+			continue
+		var at := gate.global_position
+		if here.distance_to(Vector2(at.x, at.z)) > 1.6:
+			continue
+		var me_side := signf(global_position.z - at.z)
+		var point_side := signf(point.z - at.z)
+		if me_side != 0.0 and point_side != 0.0 and me_side != point_side:
+			return gate
+	return null
+
+func _nearest_opening(gate: Node3D) -> bool:
+	var at := Vector2(gate.global_position.x, gate.global_position.z)
+	var mine := Vector2(global_position.x, global_position.z).distance_to(at)
+	for other in get_tree().get_nodes_in_group("enemies"):
+		var body := other as CharacterBody3D
+		if body == null or body == self or body._dead:
+			continue
+		var there := Vector2(body.global_position.x, body.global_position.z).distance_to(at)
+		if there + 0.05 < mine:
+			return false
+	return true
+
 func _surround_slot(player: Node3D, delta: float) -> Vector3:
-	if _floor_apart(player):
+	if _stay_on_path(player):
 		_flank_on = false
 		_outer = false
 		return Vector3.ZERO
@@ -437,7 +592,7 @@ func _lip_held(lip: Vector3) -> bool:
 			continue
 		var flat := body.global_position - lip
 		flat.y = 0.0
-		if flat.length() < 0.7:
+		if flat.length() < 0.42:
 			return true
 	return false
 
@@ -471,7 +626,7 @@ func _climb_through_window(delta: float) -> void:
 		_climb_t = 0.0
 		_lip_stuck = 0.0
 	if _climb_phase == 0:
-		var lip := _window_approach()
+		var lip := _window_lip()
 		var flat := lip - global_position
 		flat.y = 0.0
 		var gap := flat.length()
@@ -680,7 +835,7 @@ func _on_final_leg() -> bool:
 	if _agent == null or _door_fight():
 		return true
 	var player := get_tree().get_first_node_in_group("player") as Node3D
-	if player != null and _floor_apart(player):
+	if player != null and _stay_on_path(player):
 		return false
 	if _agent.is_navigation_finished():
 		return true
@@ -892,6 +1047,8 @@ func _die() -> void:
 		return
 	_dead = true
 	_death_t = DEATH_TIME
+	_silence_line()
+	_scream()
 	_corpse_floor = _floor_under()
 	collision_layer = 0
 	collision_mask = 0
@@ -989,15 +1146,85 @@ func _is_loop(clip: String) -> bool:
 	var lower := clip.to_lower()
 	return "walk" in lower or "idle" in lower
 
-func _voice(stream: AudioStream, db: float) -> void:
+func _tick_line(delta: float) -> void:
+	_line_wait -= delta
+	if _line_wait > 0.0 or _lines.is_empty():
+		return
+	_line_wait = randf_range(2.5, 6.0)
+	_say(_lines[randi() % _lines.size()])
+
+func _say(stream: AudioStream) -> void:
+	_silence_line()
+	var player := AudioStreamPlayer3D.new()
+	player.stream = stream
+	player.volume_db = 0.25
+	player.pitch_scale = 1.0
+	_hear_from_body(player)
+	player.unit_size = 6.0
+	add_child(player)
+	player.finished.connect(_line_finished.bind(player))
+	_line_voice = player
+	player.play()
+
+const DEATH_PATHS := [
+	"res://assets/audio/death_scream.mp3",
+	"res://assets/audio/death_doom.mp3",
+	"res://assets/audio/death_possessed.wav",
+	"res://assets/audio/death_shocktrooper.wav",
+]
+
+func _scream() -> void:
+	var stream := load(DEATH_PATHS[randi() % DEATH_PATHS.size()]) as AudioStream
+	if stream == null:
+		return
+	var player := AudioStreamPlayer3D.new()
+	player.stream = stream
+	player.volume_db = -6.5
+	player.pitch_scale = 1.0
+	_hear_from_body(player)
+	var host := get_parent()
+	if host == null:
+		return
+	host.add_child(player)
+	player.global_position = global_position
+	player.finished.connect(player.queue_free)
+	player.play()
+
+func _silence_line() -> void:
+	if _line_voice == null or not is_instance_valid(_line_voice):
+		_line_voice = null
+		return
+	_line_voice.stop()
+	_line_voice.queue_free()
+	_line_voice = null
+
+func _line_finished(player: AudioStreamPlayer3D) -> void:
+	if player == _line_voice:
+		_line_voice = null
+	if is_instance_valid(player):
+		player.queue_free()
+
+func _load_lines(paths: Array) -> void:
+	_lines.clear()
+	for path in paths:
+		var stream := load(str(path)) as AudioStream
+		if stream:
+			_lines.append(stream)
+
+func _voice(stream: AudioStream, db: float, pitch_lo: float = 0.92, pitch_hi: float = 1.08) -> void:
 	var player := AudioStreamPlayer3D.new()
 	player.stream = stream
 	player.volume_db = db
-	player.pitch_scale = randf_range(0.92, 1.08)
-	player.max_distance = 18.0
+	player.pitch_scale = randf_range(pitch_lo, pitch_hi)
+	_hear_from_body(player)
 	add_child(player)
 	player.finished.connect(player.queue_free)
 	player.play()
+
+func _hear_from_body(player: AudioStreamPlayer3D) -> void:
+	player.unit_size = 2.0
+	player.max_distance = 24.0
+	player.attenuation_model = AudioStreamPlayer3D.ATTENUATION_INVERSE_DISTANCE
 
 func _play(clip: String) -> void:
 	if _anim == null:

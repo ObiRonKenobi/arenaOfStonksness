@@ -4,6 +4,7 @@ signal enemy_count_changed(alive: int, remaining: int)
 signal intermission_started(seconds: float)
 
 const INTERMISSION := 10.0
+const SPAWN_GAP := 1.6
 # Waves 1-9, one row per player count from 1 to 4. Later waves use the square formulas.
 const EARLY_BUDGET := [
 	[6, 8, 13, 18, 24, 27, 28, 28, 29],
@@ -12,7 +13,7 @@ const EARLY_BUDGET := [
 	[10, 12, 21, 29, 37, 45, 49, 52, 56],
 ]
 var _alive := 0
-var _alive_cap := 8
+var _alive_cap := 30
 var _players := 1
 var _budget := 0
 var _spawned := 0
@@ -21,6 +22,7 @@ var _between := 0.0
 var _in_round := false
 var _king_phase := false
 var _king_next := false
+var _reached_cap := false
 
 func _ready() -> void:
 	GameState.match_started.connect(_on_match_started)
@@ -44,11 +46,18 @@ func _process(delta: float) -> void:
 		return
 	if _spawned < _budget:
 		if _alive >= _alive_cap:
+			_reached_cap = true
 			return
 		_spawn_wait -= delta
 		if _spawn_wait <= 0.0:
-			_spawn_one()
-			_spawn_wait = maxf(0.6, 1.2 - float(GameState.round_index) * 0.02)
+			var count := _spawn_batch()
+			for _i in count:
+				if _spawned >= _budget or _alive >= _alive_cap:
+					break
+				_spawn_one()
+			if _alive >= _alive_cap:
+				_reached_cap = true
+			_spawn_wait = SPAWN_GAP
 	elif _alive <= 0:
 		_in_round = false
 		if _king_phase:
@@ -79,15 +88,17 @@ func _stop() -> void:
 	_alive = 0
 	_king_phase = false
 	_king_next = false
+	_reached_cap = false
 
 func _start_round(index: int) -> void:
 	GameState.set_round(index)
 	_players = _player_count()
-	_alive_cap = 8 + 4 * (_players - 1)
+	_alive_cap = _cap_for(index, _players)
 	_budget = _wave_budget(index, _players)
 	_spawned = 0
 	_alive = 0
 	_spawn_wait = 0.4
+	_reached_cap = false
 	_in_round = true
 	_emit_counts()
 	GameState.toast("Wave %d" % index)
@@ -95,14 +106,31 @@ func _start_round(index: int) -> void:
 func _begin_kings() -> void:
 	_king_phase = true
 	_players = _player_count()
-	_alive_cap = 8 + 4 * (_players - 1)
+	_alive_cap = _cap_for(maxi(GameState.round_index, 1), _players)
 	_budget = _wave_budget(maxi(GameState.round_index, 1), _players)
 	_spawned = 0
 	_alive = 0
 	_spawn_wait = 0.4
+	_reached_cap = false
 	_in_round = true
 	_emit_counts()
 	GameState.toast("King round")
+
+func _cap_for(wave: int, players: int) -> int:
+	var cap := 30 + 10 * (players - 1)
+	if wave >= 20:
+		cap += 5 * int(wave / 10) - 5
+	return cap
+
+func _spawn_batch() -> int:
+	var room := _alive_cap - _alive
+	if room <= 0:
+		return 0
+	if not _reached_cap:
+		return mini(randi_range(2, 5), room)
+	var fullness := float(_alive) / float(_alive_cap)
+	var want := clampi(int(round(lerpf(5.0, 1.0, fullness))), 1, 5)
+	return mini(want, room)
 
 func _spawn_one() -> void:
 	var map := get_tree().get_first_node_in_group("map")
@@ -127,8 +155,6 @@ func _on_enemy_died(enemy: Node = null) -> void:
 	_alive = maxi(0, _alive - 1)
 	if _king_phase and _alive <= 0 and _spawned >= _budget and enemy is Node3D:
 		_drop_king_ammo((enemy as Node3D).global_position)
-	if _spawned < _budget and _alive < _alive_cap:
-		_spawn_wait = 0.0
 	_emit_counts()
 
 func _roll_archetype() -> String:

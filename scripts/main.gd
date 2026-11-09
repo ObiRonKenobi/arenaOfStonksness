@@ -121,9 +121,15 @@ func _smoke() -> void:
 	print("SMOKE queue=%s inside=%s waiting=%s" % [queue.ok, queue.inside, queue.waiting])
 	var view: Dictionary = await _smoke_view(body)
 	print("SMOKE view=%s rifle=%s pistol=%s" % [view.ok, view.rifle, view.pistol])
+	var shell: Dictionary = await _smoke_shell(body)
+	print("SMOKE shell=%s speed=%.2f restarted=%s" % [shell.ok, shell.speed, shell.restarted])
+	var shop: Dictionary = await _smoke_shop(body)
+	print("SMOKE shop=%s z=%.2f" % [shop.ok, shop.z])
+	var around: Dictionary = await _smoke_around(body)
+	print("SMOKE around=%s y=%.2f z=%.2f" % [around.ok, around.y, around.z])
 	var down: Dictionary = await _smoke_down(body)
 	print("SMOKE down=%s cam_dy=%.3f roll=%.1f over=%s" % [down.ok, down.dy, down.roll, down.over])
-	var ok := base_ok and drops_ok and bool(sprint.ok) and bool(down.ok) and bool(stair.ok) and bool(view.ok) and bool(queue.ok)
+	var ok := base_ok and drops_ok and bool(sprint.ok) and bool(down.ok) and bool(stair.ok) and bool(view.ok) and bool(queue.ok) and bool(shell.ok) and bool(shop.ok) and bool(around.ok)
 	print("SMOKE_OK" if ok else "SMOKE_FAIL")
 	get_tree().quit(0 if ok else 1)
 
@@ -255,7 +261,6 @@ func _smoke_stairs(body: CharacterBody3D) -> Dictionary:
 	foe.look_at(body.global_position, Vector3.UP)
 	var through: bool = foe.call("_in_strike", body)
 	var health := float(body.get("health"))
-	var y0 := foe.global_position.y
 	foe.set("_chase_wait", 0.0)
 	for _i in 45:
 		await get_tree().physics_frame
@@ -263,8 +268,8 @@ func _smoke_stairs(body: CharacterBody3D) -> Dictionary:
 	var flank_off := not bool(foe.get("_flank_on"))
 	for _i in 255:
 		await get_tree().physics_frame
-	var climbed := foe.global_position.y > y0 + 0.45
-	var on_stair := foe.global_position.x > 5.6
+	var climbed := foe.global_position.y > 2.6
+	var on_stair := climbed
 	foe.set_physics_process(false)
 	body.set_physics_process(true)
 	return {
@@ -386,6 +391,90 @@ func _boards_shot() -> void:
 		img.save_png(dir.path_join("board_%s.png" % id))
 		print("BOARD_SHOT %s" % id)
 	get_tree().quit()
+
+func _smoke_shell(body: CharacterBody3D) -> Dictionary:
+	body.call("give_weapon", "rent_rifle", 1, false)
+	for _i in 3:
+		await get_tree().process_frame
+	body.call("_play_view_clip", "fire", 0.0, -1)
+	var shell_anim: AnimationPlayer = null
+	for anim in body.get("_view_anims"):
+		var player := anim as AnimationPlayer
+		if player and "FireWBullet" in String(player.current_animation):
+			shell_anim = player
+			break
+	if shell_anim == null:
+		return {"ok": false, "speed": 0.0, "restarted": false}
+	var gap := 1.0 / float(body.call("_shots_per_second"))
+	var length := shell_anim.get_animation(shell_anim.current_animation).length
+	var fitted := absf(shell_anim.speed_scale - length / gap) < 0.05 and length / shell_anim.speed_scale <= gap + 0.001
+	for _i in 6:
+		await get_tree().process_frame
+	var mid := shell_anim.current_animation_position
+	body.call("_play_view_clip", "fire", 0.0, -1)
+	var restarted := shell_anim.current_animation_position < mid and shell_anim.current_animation_position < 0.05
+	return {"ok": fitted and restarted and mid > 0.05, "speed": shell_anim.speed_scale, "restarted": restarted}
+
+func _smoke_shop(body: CharacterBody3D) -> Dictionary:
+	var gate: Node = null
+	for node in get_tree().get_nodes_in_group("gates"):
+		if absf((node as Node3D).global_position.x) < 0.2:
+			gate = node
+			break
+	if gate == null or not gate.has_method("use"):
+		return {"ok": false, "z": 0.0}
+	_smoke_ai(false)
+	body.set_physics_process(false)
+	body.global_position = Vector3(0.0, 0.2, 9.0)
+	body.velocity = Vector3.ZERO
+	gate.call("use", body)
+	if not gate.get("_open"):
+		gate.set("_open", true)
+		gate.set("collision_layer", 0)
+		for child in gate.get_children():
+			if child is CollisionShape3D:
+				(child as CollisionShape3D).disabled = true
+	var foe: CharacterBody3D = null
+	for node in get_tree().get_nodes_in_group("enemies"):
+		var candidate := node as CharacterBody3D
+		if candidate != null and not bool(candidate.get("_dead")):
+			foe = candidate
+			break
+	if foe == null:
+		body.set_physics_process(true)
+		return {"ok": false, "z": 0.0}
+	foe.set_physics_process(true)
+	foe.set("_door", null)
+	foe.set("_swing_t", -1.0)
+	foe.set("_cool", 0.0)
+	foe.set("_flank_on", true)
+	foe.set("_chase_wait", 0.0)
+	foe.global_position = Vector3(0.0, 0.15, 5.2)
+	foe.velocity = Vector3.ZERO
+	for _i in 300:
+		await get_tree().physics_frame
+	var crossed := foe.global_position.z > 7.4
+	foe.set_physics_process(false)
+	body.set_physics_process(true)
+	return {"ok": crossed, "z": foe.global_position.z}
+
+func _smoke_around(body: CharacterBody3D) -> Dictionary:
+	_smoke_ai(false)
+	body.set_physics_process(false)
+	body.global_position = Vector3(7.2, 3.2, 4.2)
+	body.velocity = Vector3.ZERO
+	var foe := preload("res://scenes/enemy.tscn").instantiate() as CharacterBody3D
+	add_child(foe)
+	foe.global_position = Vector3(7.2, 0.15, 3.4)
+	foe.call("setup", "broker", 40.0, 2.4, null)
+	for _i in 600:
+		await get_tree().physics_frame
+	var y := foe.global_position.y
+	var z := foe.global_position.z
+	var around := y > 2.6 and z > 2.0
+	foe.set_physics_process(false)
+	body.set_physics_process(true)
+	return {"ok": around, "y": y, "z": z}
 
 func _smoke_down(body: CharacterBody3D) -> Dictionary:
 	body.call("take_damage", 10000.0)

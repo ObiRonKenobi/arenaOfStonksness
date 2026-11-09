@@ -6,6 +6,8 @@ var boards := 6
 var max_boards := 6
 var sill_top := 1.05
 var _outside := Vector3.ZERO
+var _hits := 0
+const HITS_PER_BOARD := 2
 
 func _ready() -> void:
 	add_to_group("barricades")
@@ -59,11 +61,34 @@ func board(player: Node) -> void:
 		player.call("add_cash", pay)
 	GameState.toast("+$%d" % pay)
 
-func chip(_amount: int = 1) -> void:
+func chip(amount: int = 1) -> void:
 	if boards <= 0:
 		return
+	_hits += amount
+	if _hits < HITS_PER_BOARD:
+		return
+	_hits = 0
 	boards -= 1
 	_rebuild()
+	_play_plank()
+
+func _play_plank() -> void:
+	var stream := load("res://assets/audio/plank_fall.mp3") as AudioStream
+	if stream == null:
+		return
+	var player := AudioStreamPlayer3D.new()
+	player.stream = stream
+	player.volume_db = -4.0
+	player.pitch_scale = 1.0
+	player.unit_size = 3.0
+	player.max_distance = 24.0
+	var host := get_parent()
+	if host == null:
+		return
+	host.add_child(player)
+	player.global_position = global_position
+	player.finished.connect(player.queue_free)
+	player.play()
 
 func prompt_for(_player: Node) -> String:
 	if boards >= max_boards:

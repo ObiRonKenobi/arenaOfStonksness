@@ -5,6 +5,7 @@ signal ammo_changed
 signal cash_changed(amount: int)
 signal ult_changed(amount: float)
 signal weapon_changed
+signal ammo_for_me
 
 const SPEED := 5.6
 const HIP_FOV := 75.0
@@ -81,6 +82,7 @@ var _burst_side := 0
 var _burst_gap := 0.0
 var _board_time := 0.0
 var _board_target: Node = null
+var _board_sfx: AudioStreamPlayer
 var _muzzle_flashes: Array[MeshInstance3D] = []
 var _muzzle_guns: Array[Node3D] = []
 var _muzzle_time := 0.0
@@ -269,10 +271,40 @@ func take_damage(amount: float) -> void:
 		_down()
 
 func heal(amount: float) -> void:
-	if _downed:
+	if _downed or health >= max_health:
 		return
 	health = minf(max_health, health + amount)
 	health_changed.emit(health, max_health)
+
+func needs_health() -> bool:
+	return not _downed and health < max_health
+
+func weapon_needs_ammo(id: String) -> bool:
+	_store_slot()
+	var index := _slot_of(id)
+	if index < 0:
+		return false
+	return _slot_needs_ammo(_slots[index])
+
+func carried_needs_ammo() -> bool:
+	_store_slot()
+	for slot in _slots:
+		if str(slot.get("id", "")) == "":
+			continue
+		if _slot_needs_ammo(slot):
+			return true
+	return false
+
+func _slot_needs_ammo(slot: Dictionary) -> bool:
+	var id := str(slot.get("id", ""))
+	var tier := int(slot.get("tier", 1))
+	var cap := _capacity_for(id, tier)
+	if int(slot.get("mag", 0)) < cap:
+		return true
+	if id == "pipe_pistol" and tier >= 3 and int(slot.get("offhand", 0)) < cap:
+		return true
+	var stock := _reserve_for(id, tier) + int(Economy.weapon(id).mag) * int(slot.get("smith_ammo", 0))
+	return int(slot.get("reserve", 0)) < stock
 
 func refill_carried_ammo() -> void:
 	_store_slot()
@@ -373,6 +405,9 @@ func refill_weapon(id: String) -> void:
 	else:
 		_slots[index].reserve = int(_slots[index].reserve) + amount
 	ammo_changed.emit()
+
+func note_ammo() -> void:
+	ammo_for_me.emit()
 
 func weapon_hud() -> String:
 	var lines: PackedStringArray = []
@@ -875,10 +910,13 @@ func _interact() -> void:
 
 func _tick_board(delta: float) -> void:
 	var door := _nearby_window()
-	if door == null or not Input.is_action_pressed("interact") or int(door.get("boards")) >= int(door.get("max_boards")):
+	var building := door != null and Input.is_action_pressed("interact") and int(door.get("boards")) < int(door.get("max_boards"))
+	if not building:
 		_board_time = 0.0
 		_board_target = null
+		_stop_board_sfx()
 		return
+	_start_board_sfx()
 	if door != _board_target:
 		_board_target = door
 		_board_time = 0.0
@@ -886,6 +924,23 @@ func _tick_board(delta: float) -> void:
 	if _board_time >= BOARD_HOLD:
 		_board_time = 0.0
 		door.call("board", self)
+
+func _start_board_sfx() -> void:
+	if _board_sfx == null:
+		var stream := load("res://assets/audio/boarding.mp3") as AudioStreamMP3
+		if stream == null:
+			return
+		stream.loop = true
+		_board_sfx = AudioStreamPlayer.new()
+		_board_sfx.stream = stream
+		_board_sfx.volume_db = -4.0
+		add_child(_board_sfx)
+	if not _board_sfx.playing:
+		_board_sfx.play()
+
+func _stop_board_sfx() -> void:
+	if _board_sfx != null and _board_sfx.playing:
+		_board_sfx.stop()
 
 func _nearby_window() -> Node:
 	var best: Node = null
@@ -989,10 +1044,24 @@ func market_crash_active() -> bool:
 func _down() -> void:
 	_downed = true
 	_bleed = 3.0
+	_stop_board_sfx()
 	perks.clear()
 	max_health = 100.0
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	_hero_scream()
 	GameState.toast("Down.")
+
+func _hero_scream() -> void:
+	var stream := load("res://assets/audio/hero_death.mp3") as AudioStream
+	if stream == null:
+		return
+	var player := AudioStreamPlayer.new()
+	player.stream = stream
+	player.volume_db = -4.0
+	player.pitch_scale = 1.0
+	add_child(player)
+	player.finished.connect(player.queue_free)
+	player.play()
 
 func _step_up(dir: Vector3) -> void:
 	var space := get_world_3d().direct_space_state
@@ -1685,6 +1754,9 @@ func _view_clip(anim: AnimationPlayer, kind: String) -> String:
 	return fire_hit
 
 func _play_view_clip(kind: String, fit_seconds: float, side: int = -1) -> void:
+	var rifle_shell := kind == "fire" and weapon_id == "rent_rifle" and weapon_tier < 2
+	if rifle_shell:
+		fit_seconds = 1.0 / _shots_per_second()
 	var players: Array[AnimationPlayer] = _view_anims
 	if _akimbo() and side == 0:
 		players = _offhand_anims
@@ -1699,7 +1771,12 @@ func _play_view_clip(kind: String, fit_seconds: float, side: int = -1) -> void:
 		if clip == "":
 			continue
 		var animation := anim.get_animation(clip)
-		if animation and fit_seconds > 0.05 and animation.length > 0.05:
+		if rifle_shell:
+			anim.speed_scale = 1.0
+			if animation and animation.length > fit_seconds:
+				anim.speed_scale = animation.length / fit_seconds
+			anim.stop()
+		elif animation and fit_seconds > 0.05 and animation.length > 0.05:
 			anim.speed_scale = animation.length / fit_seconds
 		else:
 			anim.speed_scale = 1.0

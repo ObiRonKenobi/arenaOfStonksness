@@ -43,13 +43,18 @@ func _upper_floor() -> void:
 	_box(Vector3(west_c, UPPER_Y, 0.0), Vector3(cover - west_x0, 0.25, 14.0), Color.WHITE, true, PLANKS)
 	# East caps tuck into the east wall so the landing seam stays plank.
 	# The north cap's collision starts past the hole so the ramp can meet it without a lip.
-	var cap_x0 := 5.6
+	var cap_x0 := 3.8
 	var cap_x1 := 9.05
 	var cap_c := (cap_x0 + cap_x1) * 0.5
 	var cap_w := cap_x1 - cap_x0
-	_box(Vector3(cap_c, UPPER_Y, -4.75), Vector3(cap_w, 0.25, 4.5), Color.WHITE, true, PLANKS)
-	_box(Vector3(cap_c, UPPER_Y, -2.3), Vector3(cap_w, 0.25, 0.4), Color.WHITE, false, PLANKS)
-	_box(Vector3(cap_c, UPPER_Y, 4.55), Vector3(cap_w, 0.25, 4.9), Color.WHITE, true, PLANKS)
+	# Caps overlap the main upstairs floor by almost 2 m, and the north cap
+	# overlaps the ramp nose, so the bake keeps a path around the hole.
+	var north_z0 := -7.0
+	var north_z1 := -2.15
+	_box(Vector3(cap_c, UPPER_Y, (north_z0 + north_z1) * 0.5), Vector3(cap_w, 0.25, north_z1 - north_z0), Color.WHITE, true, PLANKS)
+	var south_z0 := 2.1
+	var south_z1 := 7.0
+	_box(Vector3(cap_c, UPPER_Y, (south_z0 + south_z1) * 0.5), Vector3(cap_w, 0.25, south_z1 - south_z0), Color.WHITE, true, PLANKS)
 
 func _walls() -> void:
 	_south_rooms()
@@ -87,13 +92,13 @@ func _window_frames() -> void:
 		_pane(Vector3(x, (sill_y + head_y) * 0.5, NORTH_C), Vector3(1.5, head_y - sill_y, 0.04), glass, 0.0)
 
 func _south_rooms() -> void:
-	# Ground-floor south wall, split around doorways at x = -6, 0, and 6.
-	_box(Vector3(-7.85, 1.5, SOUTH_C), Vector3(2.3, 3.0, WALL_D), Color.WHITE, true, BRICK)
-	_box(Vector3(-3.0, 1.5, SOUTH_C), Vector3(4.6, 3.0, WALL_D), Color.WHITE, true, BRICK)
-	_box(Vector3(3.0, 1.5, SOUTH_C), Vector3(4.6, 3.0, WALL_D), Color.WHITE, true, BRICK)
-	_box(Vector3(7.85, 1.5, SOUTH_C), Vector3(2.3, 3.0, WALL_D), Color.WHITE, true, BRICK)
+	# Ground-floor south wall. Each shop door is a 2 m gap, wide enough after the nav carve.
+	_box(Vector3(-8.0, 1.5, SOUTH_C), Vector3(2.0, 3.0, WALL_D), Color.WHITE, true, BRICK)
+	_box(Vector3(-3.0, 1.5, SOUTH_C), Vector3(4.0, 3.0, WALL_D), Color.WHITE, true, BRICK)
+	_box(Vector3(3.0, 1.5, SOUTH_C), Vector3(4.0, 3.0, WALL_D), Color.WHITE, true, BRICK)
+	_box(Vector3(8.0, 1.5, SOUTH_C), Vector3(2.0, 3.0, WALL_D), Color.WHITE, true, BRICK)
 	for x in [-6.0, 0.0, 6.0]:
-		_box(Vector3(x, (2.4 + WALL_H) * 0.5, SOUTH_C), Vector3(1.5, WALL_H - 2.4, WALL_D), Color.WHITE, true, BRICK)
+		_box(Vector3(x, (2.4 + WALL_H) * 0.5, SOUTH_C), Vector3(2.0, WALL_H - 2.4, WALL_D), Color.WHITE, true, BRICK)
 	# Shop floors overlap the south wall and the back wall so no seam opens to the sky.
 	var shop_z0 := SOUTH_OUT - 0.2
 	var shop_z1 := 12.4
@@ -110,9 +115,9 @@ func _south_rooms() -> void:
 	_box(Vector3(-3, 1.5, party_z), Vector3(0.2, 3.0, party_d), Color.WHITE, true, BRICK)
 	_box(Vector3(3, 1.5, party_z), Vector3(0.2, 3.0, party_d), Color.WHITE, true, BRICK)
 	_box(Vector3(0, 1.5, 12.2), Vector3(18.4, 3.0, WALL_D), Color.WHITE, true, BRICK)
-	_gate("Street Smith", 400, Vector3(-6, 0, SOUTH_C), -1.55)
-	_gate("The Markup", 800, Vector3(0, 0, SOUTH_C), 1.55)
-	_gate("Black Market", 500, Vector3(6, 0, SOUTH_C), 1.55)
+	_gate("Street Smith", 400, Vector3(-6, 0, SOUTH_C), -2.2)
+	_gate("The Markup", 800, Vector3(0, 0, SOUTH_C), 2.2)
+	_gate("Black Market", 500, Vector3(6, 0, SOUTH_C), 2.2)
 
 func _gate(room_name: String, price: int, pos: Vector3, slide: float) -> void:
 	var gate := StaticBody3D.new()
@@ -181,7 +186,7 @@ func _stair_ramp(x0: float, x1: float, z_south: float, z_north: float) -> void:
 	var inset := 0.06
 	var xa := x0 + inset
 	var xb := x1 - inset
-	var z_flat := z_north - 0.55
+	var z_flat := z_north - 2.1
 	var y_top := FLOOR_TOP
 	var body := StaticBody3D.new()
 	body.collision_layer = 1
@@ -231,7 +236,7 @@ func _stations() -> void:
 	# Wall mounts sit on the interior face; shops stay on the floor in their rooms.
 	_station("wall", Vector3(-7.85, 0, SOUTH_IN), "street_smg", "", 180)
 	_station("wall", Vector3(-3, 0, SOUTH_IN), "debt_shotgun", "", 180)
-	_station("wall", Vector3(1.6, 0, SOUTH_IN), "rent_rifle", "", 180)
+	_station("wall", Vector3(5.4, 0, 0.0), "rent_rifle", "", -90)
 	_station("perk", Vector3(3, 0, SOUTH_IN), "", "thick_skin", 180)
 	_station("perk", Vector3(7.85, 0, SOUTH_IN), "", "rapid_fire", 180)
 	_station("perk", Vector3(WEST_IN, 0, -2), "", "tin_vest", 90)
