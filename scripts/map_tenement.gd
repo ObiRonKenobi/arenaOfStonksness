@@ -14,24 +14,48 @@ const WEST_IN := WEST_C + WALL_D * 0.5
 const EAST_IN := EAST_C - WALL_D * 0.5
 const SOUTH_OUT := SOUTH_C + WALL_D * 0.5
 const FLOOR_TOP := 3.125
-const ROOM_TONE := preload("res://assets/audio/interior_night.wav")
-const BRICK := preload("res://assets/textures/brick.png")
-const PLANKS := preload("res://assets/textures/planks.png")
+var _brick: Texture2D
+var _planks: Texture2D
+var _built := false
 
 func _ready() -> void:
 	add_to_group("map")
+	if _boot_now():
+		build()
+		load_audio()
+
+func _boot_now() -> bool:
+	var args := OS.get_cmdline_user_args()
+	return "--smoke" in args or "--audit" in args or "--gunfit" in args or "--boards" in args or "--ads" in args or _nav_boot(args)
+
+func _nav_boot(args: PackedStringArray) -> bool:
+	for arg in args:
+		if arg.begins_with("--nav"):
+			return true
+	return false
+
+func load_textures() -> void:
+	if _brick != null:
+		return
+	_brick = load("res://assets/textures/brick.png")
+	_planks = load("res://assets/textures/planks.png")
+
+func build() -> void:
+	if _built:
+		return
+	_built = true
+	load_textures()
 	# Main floor runs under the south wall to its outer face.
-	_box(Vector3(0, -0.15, 0.1), Vector3(18, 0.3, 14.2), Color.WHITE, true, PLANKS)
-	_box(Vector3(0, -0.15, -9.9), Vector3(18, 0.3, 6.6), Color.WHITE, true, PLANKS)
+	_box(Vector3(0, -0.15, 0.1), Vector3(18, 0.3, 14.2), Color.WHITE, true, _planks)
+	_box(Vector3(0, -0.15, -9.9), Vector3(18, 0.3, 6.6), Color.WHITE, true, _planks)
 	_upper_floor()
-	_box(Vector3(0, UPPER_Y + 3.0, 0), Vector3(18, 0.2, 14), Color.WHITE, true, PLANKS)
+	_box(Vector3(0, UPPER_Y + 3.0, 0), Vector3(18, 0.2, 14), Color.WHITE, true, _planks)
 	_walls()
 	_stairs()
 	_doors()
 	_window_blocks()
 	_stations()
 	_light()
-	_room_tone()
 	_bake_nav()
 
 func _upper_floor() -> void:
@@ -40,7 +64,7 @@ func _upper_floor() -> void:
 	var cover := 5.72
 	var west_x0 := -9.0
 	var west_c := (west_x0 + cover) * 0.5
-	_box(Vector3(west_c, UPPER_Y, 0.0), Vector3(cover - west_x0, 0.25, 14.0), Color.WHITE, true, PLANKS)
+	_box(Vector3(west_c, UPPER_Y, 0.0), Vector3(cover - west_x0, 0.25, 14.0), Color.WHITE, true, _planks)
 	# East caps tuck into the east wall so the landing seam stays plank.
 	# The north cap's collision starts past the hole so the ramp can meet it without a lip.
 	var cap_x0 := 3.8
@@ -51,70 +75,72 @@ func _upper_floor() -> void:
 	# overlaps the ramp nose, so the bake keeps a path around the hole.
 	var north_z0 := -7.0
 	var north_z1 := -2.15
-	_box(Vector3(cap_c, UPPER_Y, (north_z0 + north_z1) * 0.5), Vector3(cap_w, 0.25, north_z1 - north_z0), Color.WHITE, true, PLANKS)
+	_box(Vector3(cap_c, UPPER_Y, (north_z0 + north_z1) * 0.5), Vector3(cap_w, 0.25, north_z1 - north_z0), Color.WHITE, true, _planks)
 	var south_z0 := 2.1
 	var south_z1 := 7.0
-	_box(Vector3(cap_c, UPPER_Y, (south_z0 + south_z1) * 0.5), Vector3(cap_w, 0.25, south_z1 - south_z0), Color.WHITE, true, PLANKS)
+	_box(Vector3(cap_c, UPPER_Y, (south_z0 + south_z1) * 0.5), Vector3(cap_w, 0.25, south_z1 - south_z0), Color.WHITE, true, _planks)
 
 func _walls() -> void:
 	_south_rooms()
-	_box(Vector3(WEST_C, WALL_H * 0.5, 0), Vector3(WALL_D, WALL_H, 14.4), Color.WHITE, true, BRICK)
-	_box(Vector3(EAST_C, WALL_H * 0.5, 0), Vector3(WALL_D, WALL_H, 14.4), Color.WHITE, true, BRICK)
-	_box(Vector3(0, WALL_H + 1.5, NORTH_C), Vector3(18.4, 3.0, WALL_D), Color.WHITE, true, BRICK)
-	_box(Vector3(0, WALL_H + 1.5, SOUTH_C), Vector3(18.4, 3.0, WALL_D), Color.WHITE, true, BRICK)
-	_box(Vector3(WEST_C, WALL_H + 1.5, 0), Vector3(WALL_D, 3.0, 14.4), Color.WHITE, true, BRICK)
-	_box(Vector3(EAST_C, WALL_H + 1.5, 0), Vector3(WALL_D, 3.0, 14.4), Color.WHITE, true, BRICK)
+	_box(Vector3(WEST_C, WALL_H * 0.5, 0), Vector3(WALL_D, WALL_H, 14.4), Color.WHITE, true, _brick)
+	_box(Vector3(EAST_C, WALL_H * 0.5, 0), Vector3(WALL_D, WALL_H, 14.4), Color.WHITE, true, _brick)
+	_box(Vector3(0, WALL_H + 1.5, NORTH_C), Vector3(18.4, 3.0, WALL_D), Color.WHITE, true, _brick)
+	_box(Vector3(0, WALL_H + 1.5, SOUTH_C), Vector3(18.4, 3.0, WALL_D), Color.WHITE, true, _brick)
+	_box(Vector3(WEST_C, WALL_H + 1.5, 0), Vector3(WALL_D, 3.0, 14.4), Color.WHITE, true, _brick)
+	_box(Vector3(EAST_C, WALL_H + 1.5, 0), Vector3(WALL_D, 3.0, 14.4), Color.WHITE, true, _brick)
 	_north_piers()
 
 func _north_piers() -> void:
-	_box(Vector3(-7.05, 1.5, NORTH_C), Vector3(3.9, 3.0, WALL_D), Color.WHITE, true, BRICK)
-	_box(Vector3(-2.1, 1.5, NORTH_C), Vector3(2.4, 3.0, WALL_D), Color.WHITE, true, BRICK)
-	_box(Vector3(2.1, 1.5, NORTH_C), Vector3(2.4, 3.0, WALL_D), Color.WHITE, true, BRICK)
-	_box(Vector3(7.05, 1.5, NORTH_C), Vector3(3.9, 3.0, WALL_D), Color.WHITE, true, BRICK)
-	_box(Vector3(-4.2, 2.7, NORTH_C), Vector3(1.8, 0.6, WALL_D), Color.WHITE, true, BRICK)
-	_box(Vector3(0.0, 2.7, NORTH_C), Vector3(1.8, 0.6, WALL_D), Color.WHITE, true, BRICK)
-	_box(Vector3(4.2, 2.7, NORTH_C), Vector3(1.8, 0.6, WALL_D), Color.WHITE, true, BRICK)
+	_box(Vector3(-7.05, 1.5, NORTH_C), Vector3(3.9, 3.0, WALL_D), Color.WHITE, true, _brick)
+	_box(Vector3(-2.1, 1.5, NORTH_C), Vector3(2.4, 3.0, WALL_D), Color.WHITE, true, _brick)
+	_box(Vector3(2.1, 1.5, NORTH_C), Vector3(2.4, 3.0, WALL_D), Color.WHITE, true, _brick)
+	_box(Vector3(7.05, 1.5, NORTH_C), Vector3(3.9, 3.0, WALL_D), Color.WHITE, true, _brick)
+	_box(Vector3(-4.2, 2.7, NORTH_C), Vector3(1.8, 0.6, WALL_D), Color.WHITE, true, _brick)
+	_box(Vector3(0.0, 2.7, NORTH_C), Vector3(1.8, 0.6, WALL_D), Color.WHITE, true, _brick)
+	_box(Vector3(4.2, 2.7, NORTH_C), Vector3(1.8, 0.6, WALL_D), Color.WHITE, true, _brick)
 	_window_frames()
 
 func _window_frames() -> void:
 	var frame := Color(0.2, 0.14, 0.11)
 	var glass := Color(1, 1, 1, 0)
-	# 1.5 m clear opening. Posts overlap the 1.8 m pier gap so there is no slit.
-	var post_c := 0.85
-	var post_w := 0.2
+	# 1.5 m clear opening. Posts sit proud of the brick so the jamb does not z-fight.
+	var post_c := 0.93
+	var post_w := 0.36
 	var sill_y := 1.05
 	var head_y := 2.4
+	var frame_z := NORTH_C + 0.014
+	var frame_d := WALL_D + 0.03
 	for x in [-4.2, 0.0, 4.2]:
-		_box(Vector3(x, sill_y * 0.5, NORTH_C), Vector3(1.9, sill_y, WALL_D), Color.WHITE, true, BRICK)
-		_box(Vector3(x - post_c, (sill_y + head_y) * 0.5, NORTH_C), Vector3(post_w, head_y - sill_y, WALL_D), frame, true)
-		_box(Vector3(x + post_c, (sill_y + head_y) * 0.5, NORTH_C), Vector3(post_w, head_y - sill_y, WALL_D), frame, true)
-		_box(Vector3(x, (head_y + WALL_H) * 0.5, NORTH_C), Vector3(1.6, WALL_H - head_y, WALL_D), Color.WHITE, true, BRICK)
+		_box(Vector3(x, sill_y * 0.5, NORTH_C), Vector3(1.9, sill_y, WALL_D), Color.WHITE, true, _brick)
+		_box(Vector3(x - post_c, (sill_y + head_y) * 0.5, frame_z), Vector3(post_w, head_y - sill_y + 0.06, frame_d), frame, true)
+		_box(Vector3(x + post_c, (sill_y + head_y) * 0.5, frame_z), Vector3(post_w, head_y - sill_y + 0.06, frame_d), frame, true)
+		_box(Vector3(x, (head_y + WALL_H) * 0.5, NORTH_C), Vector3(1.6, WALL_H - head_y, WALL_D), Color.WHITE, true, _brick)
 		_pane(Vector3(x, (sill_y + head_y) * 0.5, NORTH_C), Vector3(1.5, head_y - sill_y, 0.04), glass, 0.0)
 
 func _south_rooms() -> void:
 	# Ground-floor south wall. Each shop door is a 2 m gap, wide enough after the nav carve.
-	_box(Vector3(-8.0, 1.5, SOUTH_C), Vector3(2.0, 3.0, WALL_D), Color.WHITE, true, BRICK)
-	_box(Vector3(-3.0, 1.5, SOUTH_C), Vector3(4.0, 3.0, WALL_D), Color.WHITE, true, BRICK)
-	_box(Vector3(3.0, 1.5, SOUTH_C), Vector3(4.0, 3.0, WALL_D), Color.WHITE, true, BRICK)
-	_box(Vector3(8.0, 1.5, SOUTH_C), Vector3(2.0, 3.0, WALL_D), Color.WHITE, true, BRICK)
+	_box(Vector3(-8.0, 1.5, SOUTH_C), Vector3(2.0, 3.0, WALL_D), Color.WHITE, true, _brick)
+	_box(Vector3(-3.0, 1.5, SOUTH_C), Vector3(4.0, 3.0, WALL_D), Color.WHITE, true, _brick)
+	_box(Vector3(3.0, 1.5, SOUTH_C), Vector3(4.0, 3.0, WALL_D), Color.WHITE, true, _brick)
+	_box(Vector3(8.0, 1.5, SOUTH_C), Vector3(2.0, 3.0, WALL_D), Color.WHITE, true, _brick)
 	for x in [-6.0, 0.0, 6.0]:
-		_box(Vector3(x, (2.4 + WALL_H) * 0.5, SOUTH_C), Vector3(2.0, WALL_H - 2.4, WALL_D), Color.WHITE, true, BRICK)
+		_box(Vector3(x, (2.4 + WALL_H) * 0.5, SOUTH_C), Vector3(2.0, WALL_H - 2.4, WALL_D), Color.WHITE, true, _brick)
 	# Shop floors overlap the south wall and the back wall so no seam opens to the sky.
 	var shop_z0 := SOUTH_OUT - 0.2
 	var shop_z1 := 12.4
 	var shop_depth := shop_z1 - shop_z0
 	var shop_z := (shop_z0 + shop_z1) * 0.5
-	_box(Vector3(0, -0.15, shop_z), Vector3(18, 0.3, shop_depth), Color.WHITE, true, PLANKS)
-	_box(Vector3(0, UPPER_Y, shop_z), Vector3(18.4, 0.25, shop_depth), Color.WHITE, true, PLANKS)
-	_box(Vector3(WEST_C, 1.5, shop_z), Vector3(WALL_D, 3.0, shop_depth), Color.WHITE, true, BRICK)
-	_box(Vector3(EAST_C, 1.5, shop_z), Vector3(WALL_D, 3.0, shop_depth), Color.WHITE, true, BRICK)
+	_box(Vector3(0, -0.15, shop_z), Vector3(18, 0.3, shop_depth), Color.WHITE, true, _planks)
+	_box(Vector3(0, UPPER_Y, shop_z), Vector3(18.4, 0.25, shop_depth), Color.WHITE, true, _planks)
+	_box(Vector3(WEST_C, 1.5, shop_z), Vector3(WALL_D, 3.0, shop_depth), Color.WHITE, true, _brick)
+	_box(Vector3(EAST_C, 1.5, shop_z), Vector3(WALL_D, 3.0, shop_depth), Color.WHITE, true, _brick)
 	var party_z0 := SOUTH_OUT
 	var party_z1 := 12.0
 	var party_z := (party_z0 + party_z1) * 0.5
 	var party_d := party_z1 - party_z0
-	_box(Vector3(-3, 1.5, party_z), Vector3(0.2, 3.0, party_d), Color.WHITE, true, BRICK)
-	_box(Vector3(3, 1.5, party_z), Vector3(0.2, 3.0, party_d), Color.WHITE, true, BRICK)
-	_box(Vector3(0, 1.5, 12.2), Vector3(18.4, 3.0, WALL_D), Color.WHITE, true, BRICK)
+	_box(Vector3(-3, 1.5, party_z), Vector3(0.2, 3.0, party_d), Color.WHITE, true, _brick)
+	_box(Vector3(3, 1.5, party_z), Vector3(0.2, 3.0, party_d), Color.WHITE, true, _brick)
+	_box(Vector3(0, 1.5, 12.2), Vector3(18.4, 3.0, WALL_D), Color.WHITE, true, _brick)
 	_gate("Street Smith", 400, Vector3(-6, 0, SOUTH_C), -2.2)
 	_gate("The Markup", 800, Vector3(0, 0, SOUTH_C), 2.2)
 	_gate("Black Market", 500, Vector3(6, 0, SOUTH_C), 2.2)
@@ -173,13 +199,72 @@ func _stairs() -> void:
 		var top := rise * float(i + 1)
 		var z := z_south - tread * 0.5 - float(i) * tread
 		var brick_h := maxf(top - wood, 0.02)
-		_box(Vector3(cx, brick_h * 0.5, z), Vector3(width, brick_h, tread), Color.WHITE, false, BRICK)
-		var step := _box(Vector3(cx, top - wood * 0.5, z), Vector3(width, wood, tread), Color.WHITE, false, PLANKS)
+		_box(Vector3(cx, brick_h * 0.5, z), Vector3(width, brick_h, tread), Color.WHITE, false, _brick)
+		var step := _box(Vector3(cx, top - wood * 0.5, z), Vector3(width, wood, tread), Color.WHITE, false, _planks)
 		step.add_to_group("stair_steps")
 	_stair_ramp(5.6, EAST_IN, z_south, z_north)
 	# Brick side wall stops inside the floor slab so the boards cover its top.
 	var wall_top := UPPER_Y
-	_box(Vector3(5.5, wall_top * 0.5, 0.0), Vector3(0.2, wall_top, z_south - z_north), Color.WHITE, true, BRICK)
+	_box(Vector3(5.5, wall_top * 0.5, 0.0), Vector3(0.2, wall_top, z_south - z_north), Color.WHITE, true, _brick)
+	_stair_rails()
+
+const STAIR_LANES: Array[float] = [6.25, 7.2, 8.15]
+
+func lane_x(lane: int) -> float:
+	return STAIR_LANES[clampi(lane, 0, STAIR_LANES.size() - 1)]
+
+func stair_count() -> int:
+	return STAIR_LANES.size()
+
+func stair_entry(lane: int, going_up: bool) -> Vector3:
+	var x := _lane_x(lane)
+	if going_up:
+		return Vector3(x, 0.0, 2.75)
+	return Vector3(x, FLOOR_TOP, -3.4)
+
+func stair_exit(lane: int, going_up: bool) -> Vector3:
+	var x := _lane_x(lane)
+	if going_up:
+		return Vector3(x, FLOOR_TOP, -2.5)
+	return Vector3(x, 0.0, 2.75)
+
+func stair_through(lane: int) -> Vector3:
+	return Vector3(_lane_x(lane), FLOOR_TOP, _clear_z(lane))
+
+func stair_clear(lane: int) -> Vector3:
+	return Vector3(5.15, FLOOR_TOP, _clear_z(lane))
+
+func _clear_z(lane: int) -> float:
+	return -2.7 - float(clampi(lane, 0, 2)) * 0.9
+
+func _lane_x(lane: int) -> float:
+	return STAIR_LANES[clampi(lane, 0, STAIR_LANES.size() - 1)]
+
+func on_ramp(at: Vector3) -> bool:
+	return at.x >= 5.6 and at.z >= -2.2 and at.z <= 2.2 and at.y > 0.1 and at.y < 3.05
+
+func floor_level(at: Vector3) -> int:
+	return 1 if at.y > 1.8 else 0
+
+func needs_stairs(a: Vector3, b: Vector3) -> bool:
+	return floor_level(a) != floor_level(b) and not on_ramp(b)
+
+func _stair_rails() -> void:
+	# Enemies only. The player can still drop through the stair hole.
+	var rail := StaticBody3D.new()
+	rail.collision_layer = 16
+	rail.collision_mask = 0
+	_rail_box(rail, Vector3(5.68, 3.725, -0.025), Vector3(0.08, 1.2, 4.25))
+	_rail_box(rail, Vector3(7.22, 3.725, 1.62), Vector3(3.16, 1.2, 0.08))
+	add_child(rail)
+
+func _rail_box(body: StaticBody3D, pos: Vector3, size: Vector3) -> void:
+	var shape := CollisionShape3D.new()
+	var box := BoxShape3D.new()
+	box.size = size
+	shape.shape = box
+	shape.position = pos
+	body.add_child(shape)
 
 func _stair_ramp(x0: float, x1: float, z_south: float, z_north: float) -> void:
 	# One slope from the ground floor to a flat nose under the landing. No risers to bob on.
@@ -213,7 +298,7 @@ func _bake_nav() -> void:
 	# Group navmesh is floors, walls, ramps, and stations. Gates are not in it.
 	# A new stair is any solid slope under the limits below. A new door is another gate.
 	var nav := NavigationMesh.new()
-	nav.agent_radius = 0.4
+	nav.agent_radius = 0.45
 	nav.agent_height = 1.75
 	nav.agent_max_climb = 0.3
 	nav.agent_max_slope = 45.0
@@ -245,8 +330,6 @@ func _stations() -> void:
 	_station("smith", Vector3(-6, 0, 11.6), "", "", 180)
 	_station("markup", Vector3(0, 0, 11.6), "", "", 180)
 	_station("crate", Vector3(6, 0, 11.6), "", "", 180)
-	_station("wall", Vector3(-1.6, FLOOR_TOP, NORTH_IN), "pop_junk", "", 0)
-	_station("wall", Vector3(1.6, FLOOR_TOP, NORTH_IN), "ledger_cannon", "", 0)
 
 func _cast_lineup() -> void:
 	var row := Node3D.new()
@@ -347,9 +430,15 @@ func _tile_uv(p: Vector3, n: Vector3) -> Vector2:
 		return Vector2(p.x, p.y) * TILE
 	return Vector2(-p.x, p.y) * TILE
 
-func _room_tone() -> void:
+func load_audio() -> void:
+	if has_node("RoomTone"):
+		return
+	var stream := load("res://assets/audio/interior_night.wav") as AudioStream
+	if stream == null:
+		return
 	var tone := AudioStreamPlayer.new()
-	tone.stream = ROOM_TONE
+	tone.name = "RoomTone"
+	tone.stream = stream
 	tone.volume_db = -16.0
 	if tone.stream is AudioStreamWAV:
 		(tone.stream as AudioStreamWAV).loop_mode = AudioStreamWAV.LOOP_FORWARD

@@ -133,8 +133,8 @@ func _board_all_windows(player: Node) -> void:
 func _buy_crate(player: Node) -> void:
 	if not player.call("try_buy", Economy.CRATE_COST):
 		return
-	var rolled := Economy.roll_crate()
-	player.call("give_weapon", rolled, 1, false)
+	var rolled: Dictionary = Economy.roll_crate()
+	player.call("give_weapon", str(rolled["id"]), int(rolled["tier"]), false)
 
 func _title() -> String:
 	match kind:

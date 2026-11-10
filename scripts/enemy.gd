@@ -34,14 +34,6 @@ const IMPACT := 0.38
 const REACH := 1.15
 const STRIKE_HEIGHT := 1.4
 const TURN_RATE := 8.0
-# Capsules touch at 0.7. Followers ease off inside GAP_FAR and stop at GAP_NEAR.
-const GAP_NEAR := 0.72
-const GAP_FAR := 1.05
-# On the last straight stretch, each body holds its own side of the player instead of the same line.
-const SURROUND := 6.5
-const RING := 1.0
-const RING_OUT := 1.75
-const FLANK_RATE := 2.4
 const MANTLE := "Mantle"
 const MANTLE_TIME := 1.75
 const SPINE_SHARE := {"Hips": 0.3, "Abdomen": 0.25, "Torso": 0.25, "Chest": 0.2}
@@ -103,36 +95,68 @@ var _death_t := 0.0
 var _corpse_floor := 0.0
 var _wander_phase := 0.0
 var _steer_t := 0.0
-var _steer_side := 1.0
-var _steer_normal := Vector3.ZERO
-var _side_bias := 1.0
-var _flank := 0.0
-var _flank_on := false
-var _outer := false
-var _pace := 1.0
 var _walk_hold := 0.0
 var _agent: NavigationAgent3D
+var _safe := Vector3.ZERO
+var _goal := Vector3(9999.0, 9999.0, 9999.0)
+var _goal_wait := 0.0
+var _goal_force := true
+var _hold_t := 0.0
+var _slow_t := 0.0
+var _wall_t := 0.0
+var _did_repath := false
+var wall_stuck_max := 0.0
+var snaps := 0
+var _stair_lane := -1
+var _stair_up := false
+var _stair_leg := 0
+var _window_lane := -1
+var _claim_wait := 0.0
+var _at_lip := false
+var _lane_let_go := false
+var _land_at := Vector3.ZERO
+var _no_progress := 0
+var _progress_t := 0.0
+var _progress_dist := 0.0
+var _progress_moved := 0.0
+var _progress_seen := false
+var _detour_left := 0.0
+var _detour_at := Vector3.ZERO
+var _no_lane_t := 0.0
+var _ahead_shape: SphereShape3D
 var _chase_at := Vector3(9999, 9999, 9999)
 var _chase_wait := 0.0
 var _line_wait := 0.0
+var _line_busy := false
+var _line_recent: Array[int] = []
 var _lines: Array[AudioStream] = []
 var _line_voice: AudioStreamPlayer3D
 
 func _ready() -> void:
 	add_to_group("enemies")
 	collision_layer = 2
-	collision_mask = 3
+	collision_mask = 19
 	floor_snap_length = 0.45
 	floor_max_angle = deg_to_rad(50.0)
 	floor_constant_speed = true
 	_wander_phase = randf() * TAU
-	_side_bias = 1.0 if randi() % 2 == 0 else -1.0
+	_goal_wait = randf() * 0.3
+	_ahead_shape = SphereShape3D.new()
+	_ahead_shape.radius = 0.4
 	_agent = NavigationAgent3D.new()
-	_agent.radius = 0.35
-	_agent.height = 1.75
-	_agent.path_desired_distance = 0.45
-	_agent.target_desired_distance = 0.5
+	_agent.radius = 0.34
+	_agent.height = 1.8
+	_agent.path_desired_distance = 0.2
+	_agent.target_desired_distance = 0.35
+	_agent.path_max_distance = 0.8
+	_agent.avoidance_enabled = true
+	_agent.neighbor_distance = 3.0
+	_agent.max_neighbors = 8
+	_agent.time_horizon_agents = 0.8
+	_agent.max_speed = 2.4
+	_agent.avoidance_priority = 0.5
 	add_child(_agent)
+	_agent.velocity_computed.connect(_on_safe_velocity)
 	_line_wait = randf_range(1.5, 4.0)
 
 func setup(kind: String, health: float, move_speed: float, door: Node3D) -> void:
@@ -140,6 +164,8 @@ func setup(kind: String, health: float, move_speed: float, door: Node3D) -> void
 	hp = health
 	speed = move_speed
 	_door = door
+	if _agent:
+		_agent.max_speed = move_speed * 1.1
 	match kind:
 		"broker":
 			attack = 7.0
@@ -149,6 +175,9 @@ func setup(kind: String, health: float, move_speed: float, door: Node3D) -> void
 	_load_lines(KING_LINE_PATHS if kind == "king" else LINE_PATHS)
 	_wear_model()
 	_voice(MOAN_SFX, -10.0)
+
+func _on_safe_velocity(safe_velocity: Vector3) -> void:
+	_safe = safe_velocity
 
 func _physics_process(delta: float) -> void:
 	if _dead:
@@ -160,7 +189,6 @@ func _physics_process(delta: float) -> void:
 	_tick_line(delta)
 	_cool = maxf(0.0, _cool - delta)
 	_lock = maxf(0.0, _lock - delta)
-	_steer_t = maxf(0.0, _steer_t - delta)
 	_walk_hold = maxf(0.0, _walk_hold - delta)
 	var player := get_tree().get_first_node_in_group("player") as Node3D
 	var slow := 1.0
@@ -169,353 +197,471 @@ func _physics_process(delta: float) -> void:
 	if player and str(player.get("ult_active")) == "punk_f":
 		slow = minf(slow, 0.7)
 	_slow = slow
-	if _door and (int(_door.get("boards")) <= 0) and (_climbing or _outside_window()):
+	if _climbing:
+		_agent.avoidance_enabled = false
+		_agent.velocity = Vector3.ZERO
 		_climb_through_window(delta)
 		return
+	_agent.avoidance_enabled = true
+	if _detour_left > 0.0:
+		_detour_left = maxf(0.0, _detour_left - delta)
+		if _detour_left <= 0.0:
+			_goal_force = true
 	if _swing_t >= 0.0:
-		var before := _swing_t
-		_swing_t += delta
-		if before < IMPACT and _swing_t >= IMPACT:
-			if _board_swing:
-				_land_board()
-			else:
-				_land_hit(player)
-		var boarding := _board_swing
-		if _swing_t >= SWING:
-			_swing_t = -1.0
-			_board_swing = false
-		velocity.x = 0.0
-		velocity.z = 0.0
-		_sync_clip(false, not boarding)
-		if not is_on_floor():
-			velocity.y -= GRAVITY * delta
-		else:
-			velocity.y = -1.0
-		move_and_slide()
+		_swing_frame(player, delta)
 		return
-	var target := global_position
-	var attacking_door := false
-	if _door and int(_door.get("boards")) > 0:
-		target = _window_approach()
-		var flat := global_position - target
-		flat.y = 0.0
-		attacking_door = flat.length() < 1.15
-	elif player:
-		target = player.global_position
-		_refresh_chase(player, delta)
-		target = _agent.get_next_path_position()
-	if not attacking_door:
-		var dir := target - global_position
-		dir.y = 0.0
-		var gate := _crossing_gate(target) if player and not _door_fight() else null
-		if gate != null:
-			_flank_on = false
-		elif player and not _door_fight():
-			var slot := _surround_slot(player, delta)
-			if _flank_on:
-				dir = slot
-		if _flank_on and dir.length() <= 0.22:
-			velocity.x = 0.0
-			velocity.z = 0.0
-			_turn_toward(player.global_position - global_position, delta)
-			if _in_strike(player):
-				_begin_swing()
-		elif dir.length() > 0.15:
-			var dist := dir.length()
-			if player and not _door_fight():
-				dist = global_position.distance_to(player.global_position)
-			if _on_final_leg() and not _flank_on and gate == null and not _on_stairs():
-				dir = _weave(dir.normalized(), delta, dist)
-			else:
-				dir = dir.normalized()
-			if _on_stairs() and gate == null:
-				var side := Vector3(_stair_lane_x() - global_position.x, 0.0, 0.0)
-				dir = (dir + side * 1.6).normalized()
-			elif _steer_t > 0.0 and _steer_normal.length() > 0.1 and gate == null:
-				dir = _slide_along(_steer_normal, dir)
-			var pace_goal := _horde_pace(dir, target)
-			# A body stepping off the line still has someone ahead. Let it move sideways.
-			if _on_stairs():
-				pace_goal = maxf(pace_goal, 0.9)
-			elif gate != null and _nearest_opening(gate):
-				pace_goal = 1.0
-			elif _flank_on:
-				pace_goal = maxf(pace_goal, 0.8)
-			_ease_pace(pace_goal, delta)
-			velocity.x = dir.x * speed * _slow * _pace
-			velocity.z = dir.z * speed * _slow * _pace
-			if _flank_on:
-				_turn_toward(player.global_position - global_position, delta)
-			else:
-				_turn_toward(dir, delta)
-			if player and not _door_fight() and _in_strike(player):
-				_begin_swing()
-		else:
-			velocity.x = 0.0
-			velocity.z = 0.0
-			if player and not _door_fight() and _in_strike(player):
-				_begin_swing()
+	var goal := _choose_goal(player)
+	_push_goal(goal, delta)
+	var at_lip := _act_at_lip(player)
+	if _climbing:
+		_agent.avoidance_enabled = false
+		_agent.velocity = Vector3.ZERO
+		_climb_through_window(delta)
+		return
+	var holding := _holding_player(player)
+	if _hold_t > 0.0:
+		_hold_t = maxf(0.0, _hold_t - delta)
+	var want := Vector3.ZERO
+	if not at_lip and not holding and _hold_t <= 0.0:
+		want = _path_want(delta)
+	if _door != null:
+		_agent.avoidance_priority = 1.0 if _window_lane >= 0 else 0.1
 	else:
-		velocity.x = 0.0
-		velocity.z = 0.0
-		_face_boards()
-		_begin_swing(true)
+		_agent.avoidance_priority = 1.0 if holding else 0.5
+	_agent.velocity = want
+	var applied := want
+	if want.length() > 0.01 and _safe.length() > 0.01 and not _into_wall(_safe):
+		applied = _safe
+	velocity.x = applied.x
+	velocity.z = applied.z
+	var in_reach := player != null and _door == null and not _floor_apart(player) and _flat_to(player.global_position) <= REACH
+	if at_lip:
+		_turn_toward(-_door_out(), delta)
+	elif in_reach:
+		_turn_toward(player.global_position - global_position, delta)
+		if _in_strike(player):
+			_face_now(player)
+			_begin_swing()
+	elif Vector2(velocity.x, velocity.z).length() > 0.15:
+		_turn_toward(Vector3(velocity.x, 0.0, velocity.z), delta)
 	_sync_clip(Vector2(velocity.x, velocity.z).length() > 0.25, false)
 	if not is_on_floor():
 		velocity.y -= GRAVITY * delta
 	else:
 		velocity.y = -1.0
-	var step := Vector3(velocity.x, 0.0, velocity.z)
-	var before_pos := global_position
+	var before := global_position
 	move_and_slide()
-	_note_stuck(step, before_pos, delta)
-	if step.length() > 0.2:
-		_step_up(step)
-		_note_bump(step, before_pos)
+	_shove_out()
+	_after_move(want, before, delta)
 
-func _weave(dir: Vector3, delta: float, dist: float) -> Vector3:
-	_wander_phase += delta * 1.35
-	var fade := clampf(1.15 - float(GameState.round_index - 1) * 0.035, 0.12, 1.0)
-	var reach := clampf(dist / 2.8, 0.25, 1.0)
-	var sway := sin(_wander_phase) * 0.9 * fade * reach
-	var side := Vector3(-dir.z, 0.0, dir.x)
-	var lurch := lerpf(1.0, 0.72 + 0.28 * absf(sin(_wander_phase * 0.7)), fade)
-	return (dir + side * sway).normalized() * lurch
-
-func _on_stairs() -> bool:
-	var p := global_position
-	if p.x < 3.6 or p.x > 8.9 or p.z < -4.3 or p.z > 5.2:
-		return false
-	if p.x >= 5.55 and p.z <= 2.8:
-		return true
-	if _agent == null:
-		return false
-	var next := _agent.get_next_path_position()
-	return next.x >= 5.4 and next.z <= 3.2
-
-func _stair_lane_x() -> float:
-	var lane := int(get_instance_id()) % 4
-	if _lane_flip:
-		lane = (lane + 2) % 4
-	return lerpf(6.15, 8.3, float(lane) / 3.0)
-
-func _note_stuck(step: Vector3, before: Vector3, delta: float) -> void:
-	var moved := Vector2(global_position.x - before.x, global_position.z - before.z).length()
-	var wanted := step.length() * delta
-	if wanted > 0.04 and moved < wanted * 0.35:
-		_stuck += delta
+func _swing_frame(player: Node3D, delta: float) -> void:
+	var before := _swing_t
+	_swing_t += delta
+	if before < IMPACT and _swing_t >= IMPACT:
+		if _board_swing:
+			_land_board()
+		else:
+			_land_hit(player)
+	var boarding := _board_swing
+	if _swing_t >= SWING:
+		_swing_t = -1.0
+		_board_swing = false
+	_agent.avoidance_priority = 1.0
+	_agent.velocity = Vector3.ZERO
+	velocity.x = 0.0
+	velocity.z = 0.0
+	if _at_window_lip():
+		_turn_toward(-_door_out(), delta)
+	elif player:
+		_turn_toward(player.global_position - global_position, delta)
+	_sync_clip(false, not boarding)
+	if not is_on_floor():
+		velocity.y -= GRAVITY * delta
 	else:
-		_stuck = maxf(0.0, _stuck - delta)
-	if _stuck < 0.8:
-		return
-	_stuck = 0.0
-	_lane_flip = not _lane_flip
-	_steer_side = -1.0 if _steer_side > 0.0 else 1.0
-	var want := step
-	want.y = 0.0
-	if want.length_squared() < 0.0001:
-		want = Vector3(0.0, 0.0, -1.0)
-	_steer_normal = want.normalized()
-	_steer_t = 1.2
+		velocity.y = -1.0
+	move_and_slide()
 
-func _window_lip() -> Vector3:
+func _choose_goal(player: Node3D) -> Vector3:
+	if _detour_left > 0.0:
+		return _detour_at
+	if _door != null:
+		return _window_goal()
+	if player == null:
+		return global_position
+	var map := _map()
+	if map == null:
+		return player.global_position
+	return _stair_goal(player, map)
+
+func _stair_goal(player: Node3D, map: Node) -> Vector3:
+	var need: bool = map.call("needs_stairs", global_position, player.global_position)
+	var going_up := int(map.call("floor_level", player.global_position)) > int(map.call("floor_level", global_position))
+	var on_ramp: bool = map.call("on_ramp", global_position)
+	var split := _stair_up and player.global_position.x < 5.5
+	var still_climbing := _stair_up and _stair_leg > 0 and _stair_leg <= 2 and not _past_stairs()
+	if _stair_lane >= 0 and not on_ramp and not split and not still_climbing and (not need or going_up != _stair_up):
+		_stair_lane = -1
+		_stair_leg = 0
+		_goal_force = true
+	if need and _stair_lane < 0:
+		_stair_lane = _pick_stair_lane(map)
+		_stair_up = going_up
+		_stair_leg = 1
+		_goal_force = true
+	if _stair_lane < 0:
+		return _chase_goal(player)
+	var entry: Vector3 = map.call("stair_entry", _stair_lane, _stair_up)
+	var exit: Vector3 = map.call("stair_exit", _stair_lane, _stair_up)
+	if _stair_leg <= 1:
+		if _flat_to(entry) <= 0.5 or on_ramp:
+			_stair_leg = 2
+			_goal_force = true
+		else:
+			return entry
+	if _stair_leg <= 2:
+		if _flat_to(exit) <= 0.6 or (not split and _past_stairs()):
+			if not split:
+				_stair_lane = -1
+				_stair_leg = 0
+				_goal_force = true
+				return _chase_goal(player)
+			_stair_leg = 3
+			_goal_force = true
+		else:
+			return exit
+	if _stair_leg == 3:
+		var through: Vector3 = map.call("stair_through", _stair_lane)
+		if _flat_to(through) <= 0.6:
+			_stair_leg = 4
+			_goal_force = true
+		else:
+			return through
+	var clear: Vector3 = map.call("stair_clear", _stair_lane)
+	if _flat_to(clear) <= 0.6:
+		_stair_lane = -1
+		_stair_leg = 0
+		_goal_force = true
+		return _chase_goal(player)
+	return clear
+
+func _chase_goal(player: Node3D) -> Vector3:
+	var flat := global_position - player.global_position
+	flat.y = 0.0
+	var dist := flat.length()
+	if dist > 2.2 or dist < 0.2:
+		return player.global_position
+	var base := atan2(flat.x, flat.z)
+	var spread := (float(int(get_instance_id()) % 5) - 2.0) * 0.35
+	var angle := base + spread
+	return player.global_position + Vector3(sin(angle), 0.0, cos(angle)) * 0.8
+
+func _pick_stair_lane(map: Node) -> int:
+	var counts: Array[int] = [0, 0, 0]
+	for other in get_tree().get_nodes_in_group("enemies"):
+		var body := other as Node
+		if body == null or body == self:
+			continue
+		var lane := int(body.get("_stair_lane"))
+		if lane >= 0 and lane < 3:
+			counts[lane] += 1
+	var best := 0
+	var best_count: int = counts[0]
+	var best_dist := absf(float(map.call("lane_x", 0)) - global_position.x)
+	for i in 3:
+		var dist := absf(float(map.call("lane_x", i)) - global_position.x)
+		if counts[i] < best_count or (counts[i] == best_count and dist < best_dist):
+			best = i
+			best_count = counts[i]
+			best_dist = dist
+	return best
+
+func _past_stairs() -> bool:
+	if _stair_up:
+		return global_position.y >= 3.0 and global_position.z <= -2.2
+	return global_position.y <= 0.15 and global_position.z >= 2.2
+
+func _window_goal() -> Vector3:
+	var lane := int(_door.call("lane_of", self))
+	if lane < 0:
+		_claim_wait -= get_physics_process_delta_time()
+		if _claim_wait <= 0.0:
+			_claim_wait = 0.2
+			lane = int(_door.call("claim_lane", self))
+		if lane < 0:
+			_at_lip = false
+			_window_lane = -1
+			return _nearer_wait()
+		_goal_force = true
+	_window_lane = lane
+	var lip: Vector3 = _door.call("lip", lane)
+	_at_lip = _flat_to(lip) <= 0.6
+	return lip
+
+func _nearer_wait() -> Vector3:
+	var best: Vector3 = _door.call("wait_spot", 0)
+	var best_d := _flat_to(best)
+	var other: Vector3 = _door.call("wait_spot", 1)
+	if _flat_to(other) < best_d:
+		return other
+	return best
+
+func _act_at_lip(player: Node3D) -> bool:
+	if _door == null or not _at_lip or _window_lane < 0:
+		return false
+	var boards := int(_door.get("boards"))
+	if boards > 0:
+		_begin_swing(true)
+	elif _landing_clear(_window_lane, player):
+		_begin_climb()
+	elif player and _player_blocks_landing(_window_lane, player) and _flat_to(player.global_position) <= 1.6 and not _floor_apart(player):
+		_begin_swing(false)
+	return true
+
+func _landing_clear(lane: int, _player: Node3D) -> bool:
+	for other in get_tree().get_nodes_in_group("enemies"):
+		var body := other as CharacterBody3D
+		if body == null or body == self or body._dead:
+			continue
+		if body._climbing and body._window_lane == lane and body._door == _door:
+			return false
+	return true
+
+func _player_blocks_landing(lane: int, player: Node3D) -> bool:
+	var spot: Vector3 = _door.call("landing", lane)
+	var flat := player.global_position - spot
+	flat.y = 0.0
+	return flat.length() <= 0.8
+
+func _begin_climb() -> void:
+	if _climbing or _door == null:
+		return
+	_climbing = true
+	_climb_phase = 1
+	_climb_t = 0.0
+	_climb_from = global_position
+	_land_at = _pick_land_at(_window_lane)
+	_lane_let_go = false
+	_clip = ""
+	collision_layer = 0
+	collision_mask = 0
+	floor_snap_length = 0.0
+	velocity = Vector3.ZERO
+	_agent.avoidance_enabled = false
+	_agent.velocity = Vector3.ZERO
+
+func _holding_player(player: Node3D) -> bool:
+	if player == null or _door != null:
+		return false
+	var map := _map()
+	if map == null:
+		return false
+	if int(map.call("floor_level", player.global_position)) != int(map.call("floor_level", global_position)):
+		return false
+	return _flat_to(player.global_position) <= 0.72
+
+func _path_want(delta: float) -> Vector3:
+	var next := _agent.get_next_path_position()
+	var dir := next - global_position
+	dir.y = 0.0
+	if dir.length() < 0.05:
+		return Vector3.ZERO
+	return dir.normalized() * speed * _slow * _speed_lurch(delta)
+
+func _speed_lurch(delta: float) -> float:
+	_wander_phase += delta * 1.35
+	var map := _map()
+	var player := get_tree().get_first_node_in_group("player") as Node3D
+	# The north landing is where a crowd has to arrive as a wall. Shuffling loses that race.
+	if map and player and bool(map.call("on_ramp", global_position)) and player.global_position.x > 5.5 and player.global_position.z < -2.2:
+		return 1.0
+	var fade := clampf(1.15 - float(GameState.round_index - 1) * 0.035, 0.12, 1.0)
+	return lerpf(1.0, 0.72 + 0.28 * absf(sin(_wander_phase * 0.7)), fade)
+
+func _push_goal(goal: Vector3, delta: float) -> void:
+	_goal_wait -= delta
+	var jumped := _goal_force or goal.distance_to(_goal) >= 0.5
+	if not jumped and _goal_wait > 0.0:
+		return
+	_goal_force = false
+	_goal_wait = 0.3
+	_goal = goal
+	var snapped := goal
+	var rid := _agent.get_navigation_map()
+	if rid.is_valid():
+		var closest := NavigationServer3D.map_get_closest_point(rid, goal)
+		if closest.distance_to(goal) <= 1.5:
+			snapped = closest
+	_agent.target_position = snapped
+
+func _after_move(want: Vector3, before: Vector3, delta: float) -> void:
+	var moved := Vector2(global_position.x - before.x, global_position.z - before.z).length()
+	var wanted := Vector2(want.x, want.z).length() * delta
+	var heading := Vector3(want.x, 0.0, want.z)
+	var on_ramp := false
+	var map := _map()
+	if map:
+		on_ramp = bool(map.call("on_ramp", global_position))
+	if not on_ramp and wanted >= 0.5 * delta and moved < wanted * 0.25 and _body_ahead(heading):
+		_slow_t += delta
+	else:
+		_slow_t = 0.0
+	if _slow_t >= 0.5:
+		_slow_t = 0.0
+		_hold_t = 0.5
+	if wanted >= 0.5 * delta and moved < wanted * 0.25 and not _body_ahead(heading):
+		_wall_t += delta
+		wall_stuck_max = maxf(wall_stuck_max, _wall_t)
+	else:
+		_wall_t = 0.0
+	if _wall_t >= 0.3 and heading.length_squared() > 0.01:
+		var side := Vector3(-heading.z, 0.0, heading.x).normalized()
+		if _into_wall(side):
+			side = -side
+		global_position += side * 0.35
+		_wall_t = 0.0
+		_force_repath()
+	if _door != null and _window_lane < 0 and not _queued_at_window():
+		_no_lane_t += delta
+	else:
+		_no_lane_t = 0.0
+	_progress_moved += moved
+	if _detour_left > 0.0:
+		return
+	_progress_t += delta
+	if _progress_t < 1.0:
+		return
+	_progress_t = 0.0
+	var dist := _flat_to(_goal)
+	var moving := heading.length() > 0.05
+	var blocked := moving and _body_ahead(heading)
+	var failed := false
+	var gained := _progress_dist - dist
+	if _progress_seen and moving and not blocked and gained < 0.3 and _progress_moved < 0.35:
+		_no_progress += 1
+		failed = true
+	elif moving and (blocked or gained >= 0.3 or _progress_moved >= 0.35):
+		_no_progress = 0
+	_progress_moved = 0.0
+	_progress_seen = true
+	_progress_dist = dist
+	if failed or _no_lane_t > 6.0:
+		_react_to_stall(heading)
+
+func _body_ahead(dir: Vector3) -> bool:
+	if dir.length_squared() < 0.0001:
+		return false
+	var heading := dir.normalized()
+	for i in get_slide_collision_count():
+		var other: Object = get_slide_collision(i).get_collider()
+		if other is Node:
+			var node := other as Node
+			if node.is_in_group("enemies") or node.is_in_group("player"):
+				return true
+	var player := get_tree().get_first_node_in_group("player") as Node3D
+	if player:
+		var to := player.global_position - global_position
+		to.y = 0.0
+		if to.length() <= 1.5 and to.length() > 0.001 and to.normalized().dot(heading) > 0.5:
+			return true
+	var space := get_world_3d().direct_space_state
+	var query := PhysicsShapeQueryParameters3D.new()
+	query.shape = _ahead_shape
+	query.transform = Transform3D(Basis.IDENTITY, global_position + Vector3(0.0, 0.7, 0.0) + heading * 0.9)
+	query.collision_mask = 2
+	query.exclude = [get_rid()]
+	return not space.intersect_shape(query, 1).is_empty()
+
+func _force_repath() -> void:
+	var target := _agent.target_position
+	_agent.target_position = target + Vector3(0.02, 0.0, 0.0)
+	_agent.target_position = target
+
+func _snap_to_nav() -> void:
+	var rid := _agent.get_navigation_map()
+	if rid.is_valid():
+		var closest := NavigationServer3D.map_get_closest_point(rid, global_position)
+		if absf(closest.y - global_position.y) <= 0.75:
+			global_position = closest
+	_agent.set_velocity_forced(Vector3.ZERO)
+	snaps += 1
+	_wall_t = 0.0
+	_did_repath = false
+	_force_repath()
+
+func _shove_out() -> void:
+	var space := get_world_3d().direct_space_state
+	var shape := _ahead_shape
+	var old := shape.radius
+	shape.radius = 0.32
+	var query := PhysicsShapeQueryParameters3D.new()
+	query.shape = shape
+	query.transform = Transform3D(Basis.IDENTITY, global_position + Vector3(0.0, 0.7, 0.0))
+	query.collision_mask = 17
+	query.exclude = [get_rid()]
+	var hits := space.intersect_shape(query, 1)
+	shape.radius = old
+	if hits.is_empty():
+		return
+	var other: Object = hits[0].collider
+	if not other is Node3D:
+		return
+	var away := global_position - (other as Node3D).global_position
+	away.y = 0.0
+	if away.length() < 0.05 or away.length() > 2.0:
+		return
+	global_position += away.normalized() * 0.06
+
+func _into_wall(vel: Vector3) -> bool:
+	var flat := Vector3(vel.x, 0.0, vel.z)
+	if flat.length_squared() < 0.0001:
+		return false
+	var dir := flat.normalized()
+	var from := global_position + Vector3(0.0, 0.55, 0.0)
+	var space := get_world_3d().direct_space_state
+	var query := PhysicsRayQueryParameters3D.create(from, from + dir * 0.36)
+	query.collision_mask = 17
+	query.exclude = [self]
+	var hit := space.intersect_ray(query)
+	if hit.is_empty():
+		return false
+	return (hit.normal as Vector3).y < 0.5
+
+func _map() -> Node:
+	return get_tree().get_first_node_in_group("map")
+
+func _flat_to(point: Vector3) -> float:
+	var flat := point - global_position
+	flat.y = 0.0
+	return flat.length()
+
+func _window_side() -> Vector3:
 	var out := _door_out()
 	var side := Vector3(-out.z, 0.0, out.x)
 	if side.length_squared() < 0.0001:
-		side = Vector3.RIGHT
-	else:
-		side = side.normalized()
-	var lane := 0.35 if int(get_instance_id()) % 2 == 0 else -0.35
-	if _lane_flip:
-		lane = -lane
-	var spot := _door.global_position + out * 0.95 + side * lane
-	spot.y = 0.0
-	return spot
+		return Vector3.RIGHT
+	return side.normalized()
+
+func _lane_shift(lane: int) -> float:
+	return -0.37 if lane <= 0 else 0.37
+
+func _at_window_lip() -> bool:
+	return _at_lip and _door != null and _window_lane >= 0
+
 
 func _floor_apart(player: Node3D) -> bool:
 	return absf(player.global_position.y - global_position.y) > STRIKE_HEIGHT
-
-func _stay_on_path(player: Node3D) -> bool:
-	return _floor_apart(player) or _crosses_hole(global_position, player.global_position)
-
-func _crosses_hole(a: Vector3, b: Vector3) -> bool:
-	var span := [0.0, 1.0]
-	if not _clip_span(a.x - b.x, a.x - 5.6, span):
-		return false
-	if not _clip_span(b.x - a.x, 8.8 - a.x, span):
-		return false
-	if not _clip_span(a.z - b.z, a.z + 2.1, span):
-		return false
-	if not _clip_span(b.z - a.z, 2.1 - a.z, span):
-		return false
-	return true
-
-func _clip_span(p: float, q: float, span: Array) -> bool:
-	var t0: float = span[0]
-	var t1: float = span[1]
-	if absf(p) < 0.00001:
-		return q >= 0.0
-	var r := q / p
-	if p < 0.0:
-		if r > t1:
-			return false
-		if r > t0:
-			t0 = r
-	else:
-		if r < t0:
-			return false
-		if r < t1:
-			t1 = r
-	if t0 > t1:
-		return false
-	span[0] = t0
-	span[1] = t1
-	return true
-
-func _crossing_gate(point: Vector3) -> Node3D:
-	var here := Vector2(global_position.x, global_position.z)
-	for node in get_tree().get_nodes_in_group("gates"):
-		var gate := node as Node3D
-		if gate == null or not bool(gate.get("_open")):
-			continue
-		var at := gate.global_position
-		if here.distance_to(Vector2(at.x, at.z)) > 1.6:
-			continue
-		var me_side := signf(global_position.z - at.z)
-		var point_side := signf(point.z - at.z)
-		if me_side != 0.0 and point_side != 0.0 and me_side != point_side:
-			return gate
-	return null
-
-func _nearest_opening(gate: Node3D) -> bool:
-	var at := Vector2(gate.global_position.x, gate.global_position.z)
-	var mine := Vector2(global_position.x, global_position.z).distance_to(at)
-	for other in get_tree().get_nodes_in_group("enemies"):
-		var body := other as CharacterBody3D
-		if body == null or body == self or body._dead:
-			continue
-		var there := Vector2(body.global_position.x, body.global_position.z).distance_to(at)
-		if there + 0.05 < mine:
-			return false
-	return true
-
-func _surround_slot(player: Node3D, delta: float) -> Vector3:
-	if _stay_on_path(player):
-		_flank_on = false
-		_outer = false
-		return Vector3.ZERO
-	var from := global_position - player.global_position
-	from.y = 0.0
-	var dist := from.length()
-	if dist > SURROUND or dist < 0.05:
-		_flank_on = false
-		_outer = false
-		return Vector3.ZERO
-	# A stair or a doorway still has corners. Stay on the path until the player is in the open.
-	if not _flank_on and not _open_to(player):
-		return Vector3.ZERO
-	if not _flank_on:
-		# Split the file once. The same offset every frame would walk them back into one line.
-		var spread := 0.35 + 0.9 * float(int(get_instance_id()) % 97) / 96.0
-		_flank = atan2(from.x, from.z) + _side_bias * spread
-		_flank_on = true
-	var closer := 0
-	var push := 0.0
-	for other in get_tree().get_nodes_in_group("enemies"):
-		var body := other as CharacterBody3D
-		if body == null or body == self or body._dead or body._climb_phase > 0:
-			continue
-		var there := body.global_position - player.global_position
-		there.y = 0.0
-		var other_dist := there.length()
-		if other_dist > SURROUND or other_dist < 0.05:
-			continue
-		if other_dist < dist - 0.2:
-			closer += 1
-		var gap := wrapf(_flank - atan2(there.x, there.z), -PI, PI)
-		if absf(gap) >= 0.7:
-			continue
-		var away := _side_bias if absf(gap) < 0.1 else signf(gap)
-		push += away * (0.7 - absf(gap))
-	# Once a body is in the ring, keep it there. Falling back to the outer ring empties the far side.
-	if dist < RING + 0.5:
-		_outer = false
-	elif _outer:
-		_outer = closer >= 5
-	else:
-		_outer = closer >= 7
-	_flank = rotate_toward(_flank, wrapf(_flank + clampf(push, -1.0, 1.0), -PI, PI), FLANK_RATE * delta)
-	var radius := RING_OUT if _outer else RING
-	var slot := player.global_position + Vector3(sin(_flank), 0.0, cos(_flank)) * radius
-	return slot - global_position
-
-func _open_to(player: Node3D) -> bool:
-	var space := get_world_3d().direct_space_state
-	var from := global_position + Vector3(0, 0.8, 0)
-	var to := player.global_position + Vector3(0, 0.8, 0)
-	var query := PhysicsRayQueryParameters3D.create(from, to)
-	query.collision_mask = 1
-	query.exclude = [self, player]
-	return space.intersect_ray(query).is_empty()
-
-func _horde_pace(dir: Vector3, target: Vector3, along_path: bool = true) -> float:
-	# Followers ease off behind whoever is closer to the goal. A hard stop and go flickers the walk.
-	if dir.length() < 0.01:
-		return 1.0
-	var heading := Vector3(dir.x, 0.0, dir.z).normalized()
-	var my_rank := _goal_rank(target, along_path)
-	var pace := 1.0
-	for other in get_tree().get_nodes_in_group("enemies"):
-		var body := other as CharacterBody3D
-		if body == null or body == self or body._dead:
-			continue
-		# A body already through the window is not a wall. Yielding to it freezes the queue.
-		if body._climb_phase > 0 and body.collision_layer == 0 and body._door != null:
-			var rel: Vector3 = body.global_position - (body._door as Node3D).global_position
-			rel.y = 0.0
-			if rel.dot(body._door_out()) <= 0.0:
-				continue
-		var offset := body.global_position - global_position
-		offset.y = 0.0
-		var dist := offset.length()
-		if dist > GAP_FAR or dist < 0.001:
-			continue
-		if offset.dot(heading) < dist * 0.35:
-			continue
-		if body._goal_rank(target, along_path) < my_rank:
-			pace = minf(pace, smoothstep(GAP_NEAR, GAP_FAR, dist))
-	return pace
-
-func _ease_pace(goal: float, delta: float) -> void:
-	var rate := 6.0 if goal < _pace else 3.0
-	_pace = move_toward(_pace, goal, rate * delta)
-
-func _aside_for(heading: Vector3, target: Vector3, along_path: bool = true) -> Vector3:
-	# A worse-ranked body planted in a closer enemy's line corks the window. Step off it.
-	var my_rank := _goal_rank(target, along_path)
-	for other in get_tree().get_nodes_in_group("enemies"):
-		var body := other as CharacterBody3D
-		if body == null or body == self or body._dead or body.collision_layer == 0:
-			continue
-		var to_me := global_position - body.global_position
-		to_me.y = 0.0
-		var dist := to_me.length()
-		if dist > GAP_NEAR or dist < 0.001:
-			continue
-		if body._goal_rank(target, along_path) >= my_rank:
-			continue
-		var aim := target - body.global_position
-		aim.y = 0.0
-		if aim.length() < 0.05 or to_me.normalized().dot(aim.normalized()) < 0.5:
-			continue
-		var side := Vector3(-heading.z, 0.0, heading.x) * _side_bias
-		return (heading + side).normalized()
-	return Vector3.ZERO
 
 func _turn_toward(dir: Vector3, delta: float) -> void:
 	if Vector2(dir.x, dir.z).length() < 0.01:
 		return
 	rotation.y = rotate_toward(rotation.y, atan2(-dir.x, -dir.z), TURN_RATE * delta)
+
+func _face_now(player: Node3D) -> void:
+	var dir := player.global_position - global_position
+	dir.y = 0.0
+	if dir.length_squared() < 0.0001:
+		return
+	rotation.y = atan2(-dir.x, -dir.z)
 
 func take_damage(amount: float, source: Node, headshot: bool = false) -> void:
 	if _dead:
@@ -544,6 +690,8 @@ func take_damage(amount: float, source: Node, headshot: bool = false) -> void:
 		if _suit_name == "purple":
 			_drop_supply("health" if randi() % 2 == 0 else "ammo")
 		source.call("add_ult", 8.0)
+		if source.has_method("note_kill"):
+			source.call("note_kill", headshot)
 	_die()
 
 func knockback(from: Vector3) -> void:
@@ -564,178 +712,168 @@ func _door_out() -> Vector3:
 		return _door.call("outward")
 	return Vector3.FORWARD
 
-func _outside_window() -> bool:
-	var rel := global_position - _door.global_position
-	rel.y = 0.0
-	return rel.dot(_door_out()) > -0.15
-
-func _window_approach() -> Vector3:
-	var spot := _door.global_position + _door_out() * 0.95
-	spot.y = 0.0
-	return spot
-
-func _at_sill(gap: float) -> bool:
-	if gap <= 0.45:
-		return true
-	var rel := global_position - _door.global_position
-	rel.y = 0.0
-	var out := _door_out()
-	var depth := rel.dot(out)
-	return depth <= 1.2 and (rel - out * depth).length() <= 0.55
-
-func _lip_held(lip: Vector3) -> bool:
-	for other in get_tree().get_nodes_in_group("enemies"):
-		var body := other as CharacterBody3D
-		if body == null or body == self or body._dead or body._door != _door:
-			continue
-		if body._climb_phase <= 0:
-			continue
-		var flat := body.global_position - lip
-		flat.y = 0.0
-		if flat.length() < 0.42:
-			return true
-	return false
-
-func _separate_landing() -> void:
-	for _step in 3:
-		var push := Vector3.ZERO
-		for other in get_tree().get_nodes_in_group("enemies"):
-			var body := other as CharacterBody3D
-			if body == null or body == self or body._dead or body.collision_layer == 0:
-				continue
-			var flat := global_position - body.global_position
-			flat.y = 0.0
-			var dist := flat.length()
-			if dist >= 0.72:
-				continue
-			if dist < 0.001:
-				flat = Vector3(_side_bias, 0.0, 0.0)
-				dist = 1.0
-			push += flat.normalized() * (0.72 - dist)
-		if push.length() < 0.01:
-			return
-		global_position += push
-
 func _climb_through_window(delta: float) -> void:
 	var mesh_node := $Mesh as Node3D
-	var sill := float(_door.get("sill_top"))
 	var out := _door_out()
-	if not _climbing:
-		_climbing = true
-		_climb_phase = 0
-		_climb_t = 0.0
-		_lip_stuck = 0.0
-	if _climb_phase == 0:
-		var lip := _window_lip()
-		var flat := lip - global_position
-		flat.y = 0.0
-		var gap := flat.length()
-		if _at_sill(gap) and _lip_held(lip):
-			velocity.x = 0.0
-			velocity.z = 0.0
-			_turn_toward(-out, delta)
-			if is_on_floor():
-				velocity.y = -1.0
-			else:
-				velocity.y -= GRAVITY * delta
-			move_and_slide()
-			return
-		if not _at_sill(gap):
-			var dir := flat.normalized()
-			var nearest := _nearest_lip(lip)
-			var goal := 1.0
-			var aside := Vector3.ZERO
-			if not nearest:
-				goal = _horde_pace(dir, lip, false)
-				aside = _aside_for(dir, lip, false)
-			if aside != Vector3.ZERO:
-				dir = aside
-				goal = maxf(goal, 0.8)
-			_ease_pace(goal, delta)
-			velocity.x = dir.x * speed * _slow * _pace
-			velocity.z = dir.z * speed * _slow * _pace
-			_turn_toward(-out, delta)
-			if is_on_floor():
-				velocity.y = -1.0
-			else:
-				velocity.y -= GRAVITY * delta
-			var before := global_position
-			move_and_slide()
-			if gap > 1.2:
-				_sync_clip(Vector2(velocity.x, velocity.z).length() > 0.25, false)
-			var moved := Vector2(global_position.x - before.x, global_position.z - before.z).length()
-			if gap <= 1.2 and moved < speed * _slow * delta * 0.35:
-				_lip_stuck += delta
-			else:
-				_lip_stuck = 0.0
-			if _lip_stuck < 0.4 or _lip_held(lip):
-				return
-		_lip_stuck = 0.0
-		_climb_phase = 1
-		_climb_t = 0.0
-		_climb_from = global_position
-		_clip = ""
-		collision_layer = 0
-		collision_mask = 0
-		floor_snap_length = 0.0
-		velocity = Vector3.ZERO
 	_climb_t += delta
 	_play(MANTLE)
 	var blend := clampf(_climb_t / _climb_length(), 0.0, 1.0)
-	global_position = _mantle_root(blend, out, sill)
-	look_at(global_position - out, Vector3.UP)
+	if blend >= 0.6 and not _lane_let_go:
+		_lane_let_go = true
+		_release_lane()
+	global_position = _mantle_root(blend, out, float(_door.get("sill_top")))
+	if blend > 0.85:
+		var w := clampf((blend - 0.85) / 0.15, 0.0, 1.0)
+		var blended := global_position.lerp(_land_at, w)
+		blended.y = global_position.y
+		global_position = blended
+	if out.length_squared() > 0.0001:
+		look_at(global_position - out, Vector3.UP)
 	if blend < 1.0:
 		return
 	_climbing = false
 	_climb_phase = 0
-	_separate_landing()
+	_lane_let_go = false
 	collision_layer = 2
-	collision_mask = 3
+	collision_mask = 19
 	floor_snap_length = 0.45
 	velocity = Vector3.ZERO
+	_agent.avoidance_enabled = true
+	_agent.set_velocity_forced(Vector3.ZERO)
+	_release_lane()
+	_door = null
+	_window_lane = -1
+	_at_lip = false
+	_no_progress = 0
+	_progress_seen = false
+	_no_lane_t = 0.0
+	_goal_force = true
 	if _model:
 		_model.rotation = Vector3(0.0, PI, 0.0)
 	mesh_node.scale = Vector3.ONE
 	mesh_node.rotation = Vector3.ZERO
 	_sync_clip(true, false)
 
-func _note_bump(wanted: Vector3, before: Vector3) -> void:
-	var moved := global_position - before
-	moved.y = 0.0
-	var expect := wanted.length() * get_physics_process_delta_time()
-	if expect < 0.001 or moved.length() > expect * 0.45:
-		return
-	for i in get_slide_collision_count():
-		var hit := get_slide_collision(i)
-		var normal := hit.get_normal()
-		# The stair slope is a floor. Steering off it pins the horde at the bottom.
-		if normal.y >= 0.5:
-			continue
-		var other: Object = hit.get_collider()
-		if not (other is Node and (other as Node).is_in_group("enemies")):
-			continue
-		normal.y = 0.0
-		if normal.length() < 0.2:
-			continue
-		normal = normal.normalized()
-		# Keep one side per bump. Re-picking every frame flips a head-on body left and right.
-		var fresh := _steer_t <= 0.0 or _steer_normal.dot(normal) < 0.5
-		_steer_normal = normal
-		if fresh:
-			var lean := Vector3(-normal.z, 0.0, normal.x).dot(wanted.normalized())
-			_steer_side = _side_bias if absf(lean) < 0.15 else signf(lean)
-		_steer_t = 0.85
-		return
+func _release_lane() -> void:
+	if _door and is_instance_valid(_door) and _door.has_method("release_lane"):
+		_door.call("release_lane", self)
 
-func _slide_along(normal: Vector3, want: Vector3) -> Vector3:
-	var along := Vector3(-normal.z, 0.0, normal.x) * _steer_side
-	if along.length() < 0.01 or want.length() < 0.01:
-		return want.normalized()
-	along = along.normalized()
-	if along.dot(want.normalized()) < -0.3:
-		_steer_t = 0.0
-		return want.normalized()
-	return (along * 0.7 + want.normalized() * 0.3).normalized()
+func _pick_land_at(lane: int) -> Vector3:
+	var spot: Vector3 = _door.call("landing", lane)
+	var into := -_door_out()
+	var side := _window_side()
+	var options: Array[Vector3] = [
+		spot,
+		spot + into * 0.7,
+		spot + side * 0.9,
+		spot - side * 0.9,
+	]
+	var player := get_tree().get_first_node_in_group("player") as Node3D
+	if player == null:
+		return options[0]
+	var best: Vector3 = options[0]
+	var best_d := -1.0
+	for option in options:
+		var flat := player.global_position - option
+		flat.y = 0.0
+		var dist := flat.length()
+		if dist >= 0.8:
+			return option
+		if dist > best_d:
+			best = option
+			best_d = dist
+	return best
+
+func _queued_at_window() -> bool:
+	if _door == null:
+		return false
+	var lip_a: Vector3 = _door.call("lip", 0)
+	var lip_b: Vector3 = _door.call("lip", 1)
+	return minf(_flat_to(lip_a), _flat_to(lip_b)) <= 2.6
+
+func _react_to_stall(heading: Vector3) -> void:
+	if _door != null:
+		if _queued_at_window() and int(_door.get("boards")) == 0:
+			return
+		if _no_progress >= 3 or _no_lane_t > 6.0:
+			_switch_window()
+			_no_progress = 0
+			_progress_seen = false
+			_no_lane_t = 0.0
+		return
+	var map := _map()
+	if map and bool(map.call("on_ramp", global_position)):
+		return
+	if _no_progress >= 6:
+		_snap_to_nav()
+		_no_progress = 0
+		_progress_seen = false
+		return
+	if _no_progress >= 2:
+		_start_detour(heading)
+
+func _start_detour(heading: Vector3) -> void:
+	var rid := _agent.get_navigation_map()
+	if not rid.is_valid():
+		return
+	var forward := Vector3(heading.x, 0.0, heading.z)
+	if forward.length_squared() < 0.0001:
+		forward = -global_transform.basis.z
+		forward.y = 0.0
+	if forward.length_squared() < 0.0001:
+		return
+	forward = forward.normalized()
+	var map := _map()
+	var here_level := int(map.call("floor_level", global_position)) if map else 0
+	for _i in 6:
+		var point := NavigationServer3D.map_get_random_point(rid, 1, false)
+		if _detour_ok(point, forward, map, here_level):
+			_detour_at = point
+			_detour_left = 1.5
+			_goal_force = true
+			return
+	var closest := NavigationServer3D.map_get_closest_point(rid, global_position - forward * 3.5)
+	if _detour_ok(closest, forward, map, here_level):
+		_detour_at = closest
+		_detour_left = 1.5
+		_goal_force = true
+
+func _detour_ok(point: Vector3, forward: Vector3, map: Node, here_level: int) -> bool:
+	if map and int(map.call("floor_level", point)) != here_level:
+		return false
+	if point.y < global_position.y - 0.6:
+		return false
+	var to := point - global_position
+	to.y = 0.0
+	var dist := to.length()
+	if dist < 3.0 or dist > 4.0:
+		return false
+	return to.normalized().dot(forward) < 0.0
+
+func _switch_window() -> void:
+	_release_lane()
+	var nearest: Node3D = null
+	var nearest_d := 9999.0
+	var open_door: Node3D = null
+	var open_d := 9999.0
+	for node in get_tree().get_nodes_in_group("barricades"):
+		var door := node as Node3D
+		if door == null or door == _door:
+			continue
+		var dist := _flat_to(door.global_position)
+		if dist < nearest_d:
+			nearest = door
+			nearest_d = dist
+		if int(door.get("boards")) == 0 and dist < open_d:
+			open_door = door
+			open_d = dist
+	var pick := open_door if open_door != null else nearest
+	if pick == null:
+		return
+	_door = pick
+	_window_lane = -1
+	_at_lip = false
+	_goal_force = true
 
 func _face_boards() -> void:
 	if _door == null:
@@ -748,11 +886,11 @@ func _face_boards() -> void:
 func _begin_swing(at_boards: bool = false) -> void:
 	if _cool > 0.0 or _swing_t >= 0.0:
 		return
-	if _walk_hold > 0.0 and _is_loop(_clip):
+	if at_boards and _walk_hold > 0.0 and _is_loop(_clip):
 		return
 	_board_swing = at_boards
 	_swing_t = 0.0
-	_cool = SWING if at_boards else SWING + 0.45
+	_cool = SWING if at_boards else SWING + 0.15
 	_sync_clip(false, true)
 	_lock = SWING
 
@@ -763,14 +901,18 @@ func _land_board() -> void:
 	_door.call("chip", 1)
 
 func _at_boards() -> bool:
-	if _door == null or int(_door.get("boards")) <= 0:
+	if _door == null or int(_door.get("boards")) <= 0 or _window_lane < 0:
 		return false
-	var flat := global_position - _window_approach()
-	flat.y = 0.0
-	return flat.length() < REACH
+	var lip: Vector3 = _door.call("lip", _window_lane)
+	return _flat_to(lip) < 0.7
 
 func _land_hit(player: Node3D) -> void:
-	if player == null or not _in_strike(player):
+	if player == null:
+		return
+	if _at_window_lip() and _flat_to(player.global_position) <= 1.6 and not _floor_apart(player):
+		player.call("take_damage", attack)
+		return
+	if not _in_strike(player):
 		return
 	player.call("take_damage", attack)
 
@@ -822,79 +964,22 @@ func _process(_delta: float) -> void:
 func _door_fight() -> bool:
 	return _door != null and int(_door.get("boards")) > 0
 
-func _refresh_chase(player: Node3D, delta: float) -> void:
-	_chase_wait -= delta
-	var moved := player.global_position.distance_to(_chase_at) >= 0.4
-	if _chase_wait > 0.0 and not moved:
-		return
-	_chase_wait = 0.25
-	_chase_at = player.global_position
-	_agent.target_position = _chase_at
-
-func _on_final_leg() -> bool:
-	if _agent == null or _door_fight():
-		return true
-	var player := get_tree().get_first_node_in_group("player") as Node3D
-	if player != null and _stay_on_path(player):
-		return false
-	if _agent.is_navigation_finished():
-		return true
-	var path := _agent.get_current_navigation_path()
-	if path.is_empty():
-		return false
-	var idx := _agent.get_current_navigation_path_index()
-	return path.size() - idx <= 1
-
-func _goal_rank(target: Vector3, along_path: bool) -> float:
-	if along_path:
-		return _rank_to(target)
-	var flat := target - global_position
-	flat.y = 0.0
-	return flat.length()
-
-func _nearest_lip(lip: Vector3) -> bool:
-	var mine := _goal_rank(lip, false)
-	for other in get_tree().get_nodes_in_group("enemies"):
-		var body := other as CharacterBody3D
-		if body == null or body == self or body._dead or body._door != _door:
-			continue
-		if body._climb_phase > 0:
-			continue
-		if body._goal_rank(lip, false) + 0.05 < mine:
-			return false
-	return true
-
-func _rank_to(target: Vector3) -> float:
-	var along := _path_left()
-	if along >= 0.0:
-		return along
-	return global_position.distance_to(target)
-
-func _path_left() -> float:
-	if _agent == null:
-		return -1.0
-	var path := _agent.get_current_navigation_path()
-	if path.is_empty():
-		return -1.0
-	var idx := clampi(_agent.get_current_navigation_path_index(), 0, path.size() - 1)
-	var left := global_position.distance_to(path[idx])
-	for i in range(idx, path.size() - 1):
-		left += path[i].distance_to(path[i + 1])
-	return left
-
 func _climb_length() -> float:
 	if _anim and _anim.has_animation(MANTLE):
 		return MANTLE_TIME
 	return 1.15
 
 func _mantle_root(blend: float, out: Vector3, sill: float) -> Vector3:
+	var shift := Vector3.ZERO
+	if _window_lane >= 0:
+		shift = _window_side() * _lane_shift(_window_lane)
 	var spots: Array[Vector3] = []
 	var times: Array[float] = []
 	for key in MANTLE_KEYS:
 		times.append(float(key.t))
 		if key.has("at"):
 			var at: Vector2 = key.at
-			var spot := _door.global_position - out * at.y
+			var spot := _door.global_position - out * at.y + shift
 			spot.y = at.x * sill
 			spots.append(spot)
 		else:
@@ -1022,31 +1107,13 @@ func _bone_globals(skel: Skeleton3D, pos: Array[Vector3], rot: Array[Quaternion]
 func _mirror(v: Vector3) -> Vector3:
 	return Vector3(-v.x, v.y, v.z)
 
-func _step_up(dir: Vector3) -> void:
-	var space := get_world_3d().direct_space_state
-	var feet := global_position + Vector3(0, 0.15, 0)
-	var ahead := dir.normalized() * 0.4
-	var low := PhysicsRayQueryParameters3D.create(feet, feet + ahead)
-	low.exclude = [self]
-	low.collision_mask = 1
-	var hit_low := space.intersect_ray(low)
-	if hit_low.is_empty():
-		return
-	if (hit_low.normal as Vector3).y >= 0.5:
-		return
-	var chest := global_position + Vector3(0, STEP_HEIGHT + 0.2, 0)
-	var high := PhysicsRayQueryParameters3D.create(chest, chest + ahead)
-	high.exclude = [self]
-	high.collision_mask = 1
-	if not space.intersect_ray(high).is_empty():
-		return
-	global_position.y += STEP_HEIGHT
-
 func _die() -> void:
 	if _dead:
 		return
 	_dead = true
 	_death_t = DEATH_TIME
+	_release_lane()
+	_stair_lane = -1
 	_silence_line()
 	_scream()
 	_corpse_floor = _floor_under()
@@ -1147,17 +1214,35 @@ func _is_loop(clip: String) -> bool:
 	return "walk" in lower or "idle" in lower
 
 func _tick_line(delta: float) -> void:
-	_line_wait -= delta
-	if _line_wait > 0.0 or _lines.is_empty():
+	if _line_busy or _lines.is_empty():
 		return
-	_line_wait = randf_range(2.5, 6.0)
-	_say(_lines[randi() % _lines.size()])
+	_line_wait -= delta
+	if _line_wait > 0.0:
+		return
+	_say(_pick_line())
+
+func _pick_line() -> AudioStream:
+	var choices: Array[int] = []
+	for i in _lines.size():
+		if _line_recent.size() >= 2 and i in _line_recent:
+			continue
+		if _line_recent.size() == 1 and i == _line_recent[0] and _lines.size() > 1:
+			continue
+		choices.append(i)
+	if choices.is_empty():
+		for i in _lines.size():
+			choices.append(i)
+	var pick: int = choices[randi() % choices.size()]
+	_line_recent.append(pick)
+	while _line_recent.size() > 2:
+		_line_recent.pop_front()
+	return _lines[pick]
 
 func _say(stream: AudioStream) -> void:
-	_silence_line()
+	_line_busy = true
 	var player := AudioStreamPlayer3D.new()
 	player.stream = stream
-	player.volume_db = 0.25
+	player.volume_db = -0.25
 	player.pitch_scale = 1.0
 	_hear_from_body(player)
 	player.unit_size = 6.0
@@ -1179,7 +1264,7 @@ func _scream() -> void:
 		return
 	var player := AudioStreamPlayer3D.new()
 	player.stream = stream
-	player.volume_db = -6.5
+	player.volume_db = -2.5
 	player.pitch_scale = 1.0
 	_hear_from_body(player)
 	var host := get_parent()
@@ -1191,6 +1276,7 @@ func _scream() -> void:
 	player.play()
 
 func _silence_line() -> void:
+	_line_busy = false
 	if _line_voice == null or not is_instance_valid(_line_voice):
 		_line_voice = null
 		return
@@ -1201,6 +1287,8 @@ func _silence_line() -> void:
 func _line_finished(player: AudioStreamPlayer3D) -> void:
 	if player == _line_voice:
 		_line_voice = null
+		_line_busy = false
+		_line_wait = randf_range(2.5, 6.0)
 	if is_instance_valid(player):
 		player.queue_free()
 

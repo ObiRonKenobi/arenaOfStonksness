@@ -37,6 +37,17 @@ func prompt_for(_player: Node) -> String:
 		return ""
 	return "E  Open %s  $%d" % [title, price]
 
+func set_open(open: bool) -> void:
+	_open = open
+	if _shape:
+		_shape.disabled = open
+	if _nav_block:
+		_nav_block.disabled = open
+	collision_layer = 0 if open else 1
+	if _mesh:
+		_mesh.visible = not open
+		_mesh.position.x = slide if open else 0.0
+
 func use(player: Node) -> void:
 	if _open:
 		return

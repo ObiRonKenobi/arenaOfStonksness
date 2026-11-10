@@ -2,11 +2,11 @@ extends Node
 
 const WEAPONS := {
 	"pipe_pistol": {"name": "Pipe Pistol", "damage": 16.0, "rate": 3.2, "mag": 8, "reserve": 48, "pellets": 1, "spread": 0.012, "price": 0, "rank": 1},
-	"street_smg": {"name": "Street SMG", "damage": 9.0, "rate": 11.0, "mag": 30, "reserve": 150, "pellets": 1, "spread": 0.03, "price": 900, "rank": 2},
-	"debt_shotgun": {"name": "Debt Collector", "damage": 8.0, "rate": 1.05, "mag": 6, "reserve": 36, "pellets": 7, "spread": 0.09, "price": 1400, "rank": 3},
-	"rent_rifle": {"name": "Rent Rifle", "damage": 30.0, "rate": 3.4, "mag": 24, "reserve": 144, "pellets": 1, "spread": 0.008, "price": 1800, "rank": 4},
-	"pop_junk": {"name": "Laser Pistol", "damage": 5.0, "rate": 6.0, "mag": 12, "reserve": 36, "pellets": 1, "spread": 0.06, "price": 200, "rank": 1},
-	"ledger_cannon": {"name": "Ledger Cannon", "damage": 72.0, "rate": 0.7, "mag": 3, "reserve": 30, "pellets": 1, "spread": 0.004, "price": 2400, "rank": 5},
+	"street_smg": {"name": "Street SMG", "damage": 9.0, "rate": 11.0, "mag": 30, "reserve": 150, "pellets": 1, "spread": 0.03, "price": 1000, "rank": 2},
+	"debt_shotgun": {"name": "Debt Collector", "damage": 8.0, "rate": 1.05, "mag": 6, "reserve": 36, "pellets": 7, "spread": 0.09, "price": 1500, "rank": 3},
+	"rent_rifle": {"name": "Rent Rifle", "damage": 30.0, "rate": 3.4, "mag": 24, "reserve": 144, "pellets": 1, "spread": 0.008, "price": 2000, "rank": 4},
+	"pop_junk": {"name": "Laser Pistol", "damage": 5.0, "rate": 6.0, "mag": 12, "reserve": 36, "pellets": 1, "spread": 0.06, "price": 400, "rank": 1},
+	"ledger_cannon": {"name": "Ledger Cannon", "damage": 72.0, "rate": 0.7, "mag": 3, "reserve": 30, "pellets": 1, "spread": 0.004, "price": 800, "rank": 5},
 }
 
 const PERKS := {
@@ -22,12 +22,16 @@ const MAX_PERKS := 4
 const SMITH_MAX := 3
 
 const CRATE_TABLE := [
-	{"id": "pop_junk", "weight": 22},
-	{"id": "pipe_pistol", "weight": 18},
-	{"id": "street_smg", "weight": 22},
-	{"id": "debt_shotgun", "weight": 18},
-	{"id": "rent_rifle", "weight": 14},
-	{"id": "ledger_cannon", "weight": 6},
+	{"id": "street_smg", "tier": 1, "weight": 18},
+	{"id": "street_smg", "tier": 2, "weight": 14},
+	{"id": "debt_shotgun", "tier": 1, "weight": 16},
+	{"id": "debt_shotgun", "tier": 2, "weight": 13},
+	{"id": "rent_rifle", "tier": 1, "weight": 14},
+	{"id": "rent_rifle", "tier": 2, "weight": 12},
+	{"id": "pop_junk", "tier": 1, "weight": 7},
+	{"id": "pop_junk", "tier": 2, "weight": 3},
+	{"id": "ledger_cannon", "tier": 1, "weight": 2},
+	{"id": "ledger_cannon", "tier": 2, "weight": 1},
 ]
 
 func weapon(id: String) -> Dictionary:
@@ -72,7 +76,7 @@ func board_payout() -> int:
 	var wave := maxi(GameState.round_index, 1)
 	return mini(10 + ((wave - 1) / 5) * 2, 20)
 
-func roll_crate() -> String:
+func roll_crate() -> Dictionary:
 	var total := 0
 	for row in CRATE_TABLE:
 		total += int(row["weight"])
@@ -81,8 +85,8 @@ func roll_crate() -> String:
 	for row in CRATE_TABLE:
 		cursor += int(row["weight"])
 		if roll < cursor:
-			return str(row["id"])
-	return "pipe_pistol"
+			return {"id": str(row["id"]), "tier": int(row["tier"])}
+	return {"id": "pipe_pistol", "tier": 1}
 
 func wall_weapons() -> Array[String]:
-	return ["street_smg", "debt_shotgun", "rent_rifle", "pop_junk", "ledger_cannon"]
+	return ["street_smg", "debt_shotgun", "rent_rifle"]

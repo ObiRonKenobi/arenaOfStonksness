@@ -3,6 +3,13 @@ extends Node3D
 func _ready() -> void:
 	_ensure_inputs()
 	GameState.reset()
+	for arg in OS.get_cmdline_user_args():
+		if arg == "--voices":
+			add_child(load("res://tools/voice_check.gd").new())
+			return
+		if arg.begins_with("--nav"):
+			add_child(load("res://tools/nav_check.gd").new())
+			return
 	if "--gunfit" in OS.get_cmdline_user_args():
 		add_child(load("res://tools/gun_fit.gd").new())
 		return
@@ -12,12 +19,81 @@ func _ready() -> void:
 	if "--boards" in OS.get_cmdline_user_args():
 		_boards_shot()
 		return
+	if "--ads" in OS.get_cmdline_user_args():
+		_ads_shot()
+		return
+	if "--menu" in OS.get_cmdline_user_args():
+		_menu_check()
+		return
 	if "--smoke" in OS.get_cmdline_user_args():
 		_smoke()
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event.is_action_pressed("ui_cancel"):
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+
+func _menu_check() -> void:
+	await get_tree().process_frame
+	var hud := get_tree().get_first_node_in_group("hud")
+	hud.call("_open_story")
+	var title := str((hud.get("_page_title") as Label).text)
+	var body := str((hud.get("_page_body") as Label).text)
+	var story_ok := title == "The Memo" and "spreadsheet" in body
+	var story_back := _menu_button(hud, "Main menu")
+	hud.call("_close_page")
+	var home_ok := bool((hud.get("_menu_home") as Control).visible)
+	hud.call("_open_how")
+	var how := str((hud.get("_page_body") as Label).text)
+	var how_ok := "Left Shift sprint" in how and "Space jump" in how and "R reloads" in how and "Esc releases the mouse" in how
+	hud.call("_close_page")
+	hud.call("_open_heroes")
+	await get_tree().process_frame
+	var stage: Node = hud.get("_hero_stage")
+	var seen := PackedStringArray()
+	for _i in 4:
+		seen.append(str((hud.get("_hero_name") as Label).text))
+		hud.call("_hero_step", 1)
+	var heroes_ok := str(seen) == str(PackedStringArray(["Spike", "Reggie", "Cletus", "Rivet"]))
+	var models_ok := int(stage.call("model_count")) == 4
+	hud.call("_hero_step", 2)
+	var cletus_name := str((hud.get("_hero_name") as Label).text) == "Cletus"
+	var cletus_bio := "took their land" in str((hud.get("_hero_bio") as Label).text)
+	var heroes_back := _menu_button(hud, "Main menu")
+	hud.call("_close_heroes")
+	var closed := bool((hud.get("_menu_home") as Control).visible) and not bool(hud.get("_heroes_open"))
+	var prices_ok := int(Economy.weapon("street_smg").price) == 1000
+	prices_ok = prices_ok and int(Economy.weapon("debt_shotgun").price) == 1500
+	prices_ok = prices_ok and int(Economy.weapon("rent_rifle").price) == 2000
+	prices_ok = prices_ok and int(Economy.weapon("pop_junk").price) == 400
+	prices_ok = prices_ok and int(Economy.weapon("ledger_cannon").price) == 800
+	prices_ok = prices_ok and Economy.ammo_cost("street_smg") == 750
+	prices_ok = prices_ok and Economy.ammo_cost("pop_junk") == 300
+	prices_ok = prices_ok and Economy.ammo_cost("ledger_cannon") == 600
+	var walls: Array[String] = Economy.wall_weapons()
+	var wall_ok := walls.size() == 3 and "pop_junk" not in walls and "ledger_cannon" not in walls
+	var weights := {"pop_junk": 0, "ledger_cannon": 0, "other": 0}
+	for row in Economy.CRATE_TABLE:
+		var id := str(row["id"])
+		if id == "pop_junk" or id == "ledger_cannon":
+			weights[id] = int(weights[id]) + int(row["weight"])
+		else:
+			weights["other"] = int(weights["other"]) + int(row["weight"])
+	var crate_ok := int(weights["pop_junk"]) == 10 and int(weights["ledger_cannon"]) == 3 and int(weights["other"]) == 87
+	var player := get_tree().get_first_node_in_group("player")
+	var cash_ok := player != null and int(player.get("cash")) == 500
+	var ok := story_ok and story_back and home_ok and how_ok and heroes_ok and models_ok and cletus_name and cletus_bio and heroes_back and closed and prices_ok and wall_ok and crate_ok and cash_ok
+	print("MENU story=%s back=%s home=%s how=%s heroes=%s models=%s cletus=%s bio=%s closed=%s prices=%s walls=%s crate=%s cash=%s seen=%s" % [story_ok, story_back, home_ok, how_ok, heroes_ok, models_ok, cletus_name, cletus_bio, closed, prices_ok, wall_ok, crate_ok, cash_ok, seen])
+	if ok:
+		print("MENU_OK")
+	get_tree().quit(0 if ok else 1)
+
+func _menu_button(hud: Node, text: String) -> bool:
+	var buttons: Array = hud.find_children("*", "Button", true, false)
+	for node in buttons:
+		var button := node as Button
+		if button.visible and button.text == text:
+			return true
+	return false
 
 func _smoke() -> void:
 	await get_tree().process_frame
@@ -48,7 +124,7 @@ func _smoke() -> void:
 		player.call("refill_weapon", "pipe_pistol")
 		var refilled: bool = int(player.get("reserve")) > before
 		var ammo_price: int = Economy.ammo_cost("street_smg")
-		slots_ok = held_new and back_to_first and kept_other and replaced and refilled and ammo_price == 675
+		slots_ok = held_new and back_to_first and kept_other and replaced and refilled and ammo_price == 750
 		player.call("_switch_slot", 0)
 	print("SMOKE slots=%s" % slots_ok)
 	print("SMOKE pos=%s" % pos)
@@ -78,14 +154,7 @@ func _smoke() -> void:
 	body.global_position = Vector3(0, 0.2, -6.0)
 	body.velocity = Vector3.ZERO
 	var window_blocked := body.test_move(body.global_transform, Vector3(0, 0, -1.5))
-	var climbed := false
-	for _i in 160:
-		await get_tree().physics_frame
-		for enemy in get_tree().get_nodes_in_group("enemies"):
-			var spot := (enemy as Node3D).global_position
-			if spot.z > -6.45 and spot.y > -0.2 and spot.y < 1.15:
-				climbed = true
-	print("SMOKE jumped=%s window_blocked=%s climbed=%s" % [jumped, window_blocked, climbed])
+	print("SMOKE jumped=%s window_blocked=%s" % [jumped, window_blocked])
 	var boarded := false
 	var paid := false
 	if player:
@@ -108,28 +177,20 @@ func _smoke() -> void:
 		boarded = door != null and int(door.get("boards")) >= 1
 		paid = int(player.get("cash")) >= start_cash + 10
 	print("SMOKE boarded=%s paid=%s cash=%s" % [boarded, paid, player.get("cash") if player else 0])
-	var base_ok := GameState.running and GameState.round_index == 1 and barricades == 3 and stations == 13 and enemies > 0 and jumped and window_blocked and climbed and slots_ok and boarded and paid and int(player.get("cash")) >= 999999
+	var base_ok := GameState.running and GameState.round_index == 1 and barricades == 3 and stations == 11 and enemies > 0 and jumped and window_blocked and slots_ok and boarded and paid and int(player.get("cash")) >= 500
 	_smoke_ai(false)
 	var drop_gap := await _smoke_drop_gap()
 	var drops_ok := drop_gap <= 0.02
 	print("SMOKE drops=%s gap=%.3f" % [drops_ok, drop_gap])
 	var sprint: Dictionary = await _smoke_sprint(body)
 	print("SMOKE sprint=%s walked=%.2f sprinted=%.2f aim_cut=%s sprint_cut=%s" % [sprint.ok, sprint.walked, sprint.sprinted, sprint.aim_cut, sprint.sprint_cut])
-	var stair: Dictionary = await _smoke_stairs(body)
-	print("SMOKE stairs=%s same=%s through=%s y=%.2f x=%.2f safe=%s flank=%s" % [stair.ok, stair.same, stair.through, stair.y, stair.x, stair.safe, stair.flank])
-	var queue: Dictionary = await _smoke_queue(body)
-	print("SMOKE queue=%s inside=%s waiting=%s" % [queue.ok, queue.inside, queue.waiting])
 	var view: Dictionary = await _smoke_view(body)
 	print("SMOKE view=%s rifle=%s pistol=%s" % [view.ok, view.rifle, view.pistol])
 	var shell: Dictionary = await _smoke_shell(body)
 	print("SMOKE shell=%s speed=%.2f restarted=%s" % [shell.ok, shell.speed, shell.restarted])
-	var shop: Dictionary = await _smoke_shop(body)
-	print("SMOKE shop=%s z=%.2f" % [shop.ok, shop.z])
-	var around: Dictionary = await _smoke_around(body)
-	print("SMOKE around=%s y=%.2f z=%.2f" % [around.ok, around.y, around.z])
 	var down: Dictionary = await _smoke_down(body)
 	print("SMOKE down=%s cam_dy=%.3f roll=%.1f over=%s" % [down.ok, down.dy, down.roll, down.over])
-	var ok := base_ok and drops_ok and bool(sprint.ok) and bool(down.ok) and bool(stair.ok) and bool(view.ok) and bool(queue.ok) and bool(shell.ok) and bool(shop.ok) and bool(around.ok)
+	var ok := base_ok and drops_ok and bool(sprint.ok) and bool(down.ok) and bool(view.ok) and bool(shell.ok)
 	print("SMOKE_OK" if ok else "SMOKE_FAIL")
 	get_tree().quit(0 if ok else 1)
 
@@ -228,103 +289,6 @@ func _smoke_sprint(body: CharacterBody3D) -> Dictionary:
 		"sprint_cut": sprint_cut,
 	}
 
-func _smoke_stairs(body: CharacterBody3D) -> Dictionary:
-	for node in get_tree().get_nodes_in_group("barricades"):
-		node.set("boards", 0)
-		node.call("_rebuild")
-	var foe: CharacterBody3D = null
-	for node in get_tree().get_nodes_in_group("enemies"):
-		var candidate := node as CharacterBody3D
-		if candidate != null and not bool(candidate.get("_dead")):
-			foe = candidate
-			break
-	if foe == null:
-		return {"ok": false, "same": false, "through": true, "y": 0.0, "x": 0.0, "safe": false, "flank": false}
-	_smoke_ai(false)
-	foe.set_physics_process(true)
-	foe.set("_door", null)
-	foe.set("_swing_t", -1.0)
-	foe.set("_cool", 0.0)
-	foe.set("_flank_on", true)
-	foe.set("_climbing", false)
-	for action in ["move_forward", "move_back", "move_left", "move_right", "sprint", "aim", "interact"]:
-		Input.action_release(action)
-	body.set_physics_process(false)
-	body.global_position = Vector3(7.2, 3.2, 2.35)
-	body.velocity = Vector3.ZERO
-	foe.global_position = Vector3(7.2, 3.2, 1.4)
-	foe.velocity = Vector3.ZERO
-	foe.look_at(body.global_position, Vector3.UP)
-	var same: bool = foe.call("_in_strike", body)
-	foe.global_position = Vector3(7.2, 0.15, 2.45)
-	foe.velocity = Vector3.ZERO
-	foe.look_at(body.global_position, Vector3.UP)
-	var through: bool = foe.call("_in_strike", body)
-	var health := float(body.get("health"))
-	foe.set("_chase_wait", 0.0)
-	for _i in 45:
-		await get_tree().physics_frame
-	var safe := absf(float(body.get("health")) - health) < 0.1 and foe.global_position.y < body.global_position.y - 1.4
-	var flank_off := not bool(foe.get("_flank_on"))
-	for _i in 255:
-		await get_tree().physics_frame
-	var climbed := foe.global_position.y > 2.6
-	var on_stair := climbed
-	foe.set_physics_process(false)
-	body.set_physics_process(true)
-	return {
-		"ok": same and not through and climbed and on_stair and safe and flank_off,
-		"same": same,
-		"through": through,
-		"y": foe.global_position.y,
-		"x": foe.global_position.x,
-		"safe": safe,
-		"flank": flank_off,
-	}
-
-func _smoke_queue(body: CharacterBody3D) -> Dictionary:
-	var door: Node3D = null
-	for node in get_tree().get_nodes_in_group("barricades"):
-		if absf((node as Node3D).global_position.x) < 0.2:
-			door = node as Node3D
-			break
-	if door == null:
-		return {"ok": false, "inside": 0, "waiting": 4}
-	door.set("boards", 0)
-	door.call("_rebuild")
-	_smoke_ai(false)
-	body.set_physics_process(false)
-	body.global_position = Vector3(0.0, 0.2, -4.5)
-	body.velocity = Vector3.ZERO
-	var pack: Array[Node] = []
-	var spots: Array[Vector3] = [
-		Vector3(-0.9, 0.15, -8.7),
-		Vector3(-0.3, 0.15, -8.5),
-		Vector3(0.35, 0.15, -8.8),
-		Vector3(0.95, 0.15, -8.6),
-	]
-	for spot in spots:
-		var enemy := preload("res://scenes/enemy.tscn").instantiate()
-		add_child(enemy)
-		enemy.global_position = spot
-		enemy.call("setup", "broker", 40.0, 2.2, door)
-		pack.append(enemy)
-	for _i in 420:
-		await get_tree().physics_frame
-	var inside := 0
-	var waiting := 0
-	for enemy in pack:
-		if not is_instance_valid(enemy):
-			continue
-		var spot := (enemy as Node3D).global_position
-		if spot.z > -6.7:
-			inside += 1
-		elif spot.z < -7.2:
-			waiting += 1
-		enemy.set_physics_process(false)
-	body.set_physics_process(true)
-	return {"ok": inside >= 2 and waiting < 4, "inside": inside, "waiting": waiting}
-
 func _smoke_view(body: CharacterBody3D) -> Dictionary:
 	var door: Node = null
 	for node in get_tree().get_nodes_in_group("barricades"):
@@ -360,6 +324,52 @@ func _smoke_muzzle_clear(body: CharacterBody3D, id: String) -> bool:
 		return false
 	var hit_dist := cam.global_position.distance_to(hit.position)
 	return hit_dist < rel.length() - 0.05 and hit_dist > rel.length() * 0.18 + 0.05
+
+func _ads_shot() -> void:
+	get_window().mode = Window.MODE_WINDOWED
+	get_window().size = Vector2i(1280, 720)
+	await get_tree().process_frame
+	var director := get_node_or_null("/root/RoundDirector")
+	if director:
+		director.set_process(false)
+	GameState.begin_match()
+	if director:
+		director.set_process(false)
+	var hud := get_tree().get_first_node_in_group("hud")
+	if hud and hud.get("_menu"):
+		hud.get("_menu").visible = false
+	await get_tree().process_frame
+	for _i in 20:
+		await get_tree().physics_frame
+	var body := get_tree().get_first_node_in_group("player") as CharacterBody3D
+	body.global_position = Vector3(0.0, 0.2, -4.0)
+	body.velocity = Vector3.ZERO
+	body.rotation = Vector3.ZERO
+	body.get_node("Head").rotation = Vector3.ZERO
+	body.set("_aim", 1.0)
+	body.set("_focus", "aim")
+	var guns: Array = [
+		["pipe_pistol", 1], ["pipe_pistol", 2],
+		["street_smg", 1], ["street_smg", 2], ["street_smg", 3],
+		["debt_shotgun", 1], ["debt_shotgun", 2], ["debt_shotgun", 3],
+		["rent_rifle", 1], ["rent_rifle", 2], ["rent_rifle", 3],
+		["pop_junk", 1], ["ledger_cannon", 1],
+	]
+	var dir := OS.get_environment("TEMP").path_join("stonks_shots")
+	DirAccess.make_dir_recursive_absolute(dir)
+	for row in guns:
+		body.set("weapon_id", str(row[0]))
+		body.set("weapon_tier", int(row[1]))
+		body.set("_aim", 1.0)
+		body.set("_sight_wait", 2)
+		body.call("_show_gun")
+		for _i in 8:
+			await get_tree().physics_frame
+		var img := (body.get_node("Head/Camera3D") as Camera3D).get_viewport().get_texture().get_image()
+		var name := "%s_%d.png" % [row[0], row[1]]
+		img.save_png(dir.path_join(name))
+		print("ADS_SHOT %s fix=%.3f" % [name, float(body.get("_sight_fix"))])
+	get_tree().quit()
 
 func _boards_shot() -> void:
 	get_window().mode = Window.MODE_WINDOWED
@@ -414,67 +424,6 @@ func _smoke_shell(body: CharacterBody3D) -> Dictionary:
 	body.call("_play_view_clip", "fire", 0.0, -1)
 	var restarted := shell_anim.current_animation_position < mid and shell_anim.current_animation_position < 0.05
 	return {"ok": fitted and restarted and mid > 0.05, "speed": shell_anim.speed_scale, "restarted": restarted}
-
-func _smoke_shop(body: CharacterBody3D) -> Dictionary:
-	var gate: Node = null
-	for node in get_tree().get_nodes_in_group("gates"):
-		if absf((node as Node3D).global_position.x) < 0.2:
-			gate = node
-			break
-	if gate == null or not gate.has_method("use"):
-		return {"ok": false, "z": 0.0}
-	_smoke_ai(false)
-	body.set_physics_process(false)
-	body.global_position = Vector3(0.0, 0.2, 9.0)
-	body.velocity = Vector3.ZERO
-	gate.call("use", body)
-	if not gate.get("_open"):
-		gate.set("_open", true)
-		gate.set("collision_layer", 0)
-		for child in gate.get_children():
-			if child is CollisionShape3D:
-				(child as CollisionShape3D).disabled = true
-	var foe: CharacterBody3D = null
-	for node in get_tree().get_nodes_in_group("enemies"):
-		var candidate := node as CharacterBody3D
-		if candidate != null and not bool(candidate.get("_dead")):
-			foe = candidate
-			break
-	if foe == null:
-		body.set_physics_process(true)
-		return {"ok": false, "z": 0.0}
-	foe.set_physics_process(true)
-	foe.set("_door", null)
-	foe.set("_swing_t", -1.0)
-	foe.set("_cool", 0.0)
-	foe.set("_flank_on", true)
-	foe.set("_chase_wait", 0.0)
-	foe.global_position = Vector3(0.0, 0.15, 5.2)
-	foe.velocity = Vector3.ZERO
-	for _i in 300:
-		await get_tree().physics_frame
-	var crossed := foe.global_position.z > 7.4
-	foe.set_physics_process(false)
-	body.set_physics_process(true)
-	return {"ok": crossed, "z": foe.global_position.z}
-
-func _smoke_around(body: CharacterBody3D) -> Dictionary:
-	_smoke_ai(false)
-	body.set_physics_process(false)
-	body.global_position = Vector3(7.2, 3.2, 4.2)
-	body.velocity = Vector3.ZERO
-	var foe := preload("res://scenes/enemy.tscn").instantiate() as CharacterBody3D
-	add_child(foe)
-	foe.global_position = Vector3(7.2, 0.15, 3.4)
-	foe.call("setup", "broker", 40.0, 2.4, null)
-	for _i in 600:
-		await get_tree().physics_frame
-	var y := foe.global_position.y
-	var z := foe.global_position.z
-	var around := y > 2.6 and z > 2.0
-	foe.set_physics_process(false)
-	body.set_physics_process(true)
-	return {"ok": around, "y": y, "z": z}
 
 func _smoke_down(body: CharacterBody3D) -> Dictionary:
 	body.call("take_damage", 10000.0)

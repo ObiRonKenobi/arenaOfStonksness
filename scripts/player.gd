@@ -9,26 +9,36 @@ signal ammo_for_me
 
 const SPEED := 5.6
 const HIP_FOV := 75.0
-const ADS_FOV := 60.0
-const ADS_FOV_LONG := 50.0
+const ADS_FOV := 40.0
+const ADS_FOV_LONG := 33.3
+const ADS_FOV_RIFLE := 26.6
 const HIP_GUN := Vector3(0.24, -0.2, -0.42)
 const ADS_GUN := Vector3(0.0, -0.11, -0.5)
 const RELOAD_GUN := Vector3(0.1, -0.42, -0.32)
-const SHOTS := {
-	"pipe_pistol": preload("res://assets/audio/shot_9mm.wav"),
-	"street_smg": preload("res://assets/audio/gunshot.wav"),
-	"pop_junk": preload("res://assets/audio/shot_22.wav"),
-	"debt_shotgun": preload("res://assets/audio/shot_20g.wav"),
-	"rent_rifle": preload("res://assets/audio/shot_556.wav"),
+const SHOT_PATHS := {
+	"pipe_pistol": "res://assets/audio/shot_9mm.wav",
+	"street_smg": "res://assets/audio/gunshot.wav",
+	"pop_junk": "res://assets/audio/shot_22.wav",
+	"debt_shotgun": "res://assets/audio/shot_20g.wav",
+	"rent_rifle": "res://assets/audio/shot_556.wav",
 }
-const RELOAD_SFX := preload("res://assets/audio/reload_ak.wav")
-const SHOT_HEAVY := preload("res://assets/audio/shot_deagle.wav")
-const SHOT_BLASTER := preload("res://assets/audio/sci_blaster.mp3")
-const SHOT_SCI_GUN := preload("res://assets/audio/sci_gunshot.mp3")
-const FLASH_GUN := preload("res://assets/fx/muzzle_gun.png")
-const FLASH_LASER := preload("res://assets/fx/muzzle_laser.png")
+const GUN_PATHS: Array[String] = [
+	"res://assets/weapons/fps_rifle.glb",
+	"res://assets/weapons/fps_pistol.glb",
+	"res://assets/weapons/ledger_cannon.glb",
+	"res://assets/weapons/ray_gun.glb",
+	"res://assets/weapons/pistol_v3.glb",
+	"res://assets/weapons/pistol_v2.glb",
+	"res://assets/weapons/smg_v3.glb",
+	"res://assets/weapons/smg.glb",
+	"res://assets/weapons/smg_v1.glb",
+	"res://assets/weapons/shotgun_v3.glb",
+	"res://assets/weapons/shotgun_v2.glb",
+	"res://assets/weapons/mossberg.glb",
+	"res://assets/weapons/rifle_v3.glb",
+	"res://assets/weapons/rifle.glb",
+]
 const MOUSE_SENS := 0.0022
-const VIEWMODEL_SHADER := preload("res://shaders/viewmodel.gdshader")
 const GRAVITY := 20.0
 const JUMP_SPEED := 6.2
 const STEP_HEIGHT := 0.45
@@ -39,7 +49,18 @@ const SPRINT_FOV := 6.0
 
 var health := 100.0
 var max_health := 100.0
-var cash := 999999
+var cash := 500
+var _shots: Dictionary = {}
+var _reload_stream: AudioStream
+var _shot_heavy: AudioStream
+var _shot_blaster: AudioStream
+var _shot_sci: AudioStream
+var _flash_gun: Texture2D
+var _flash_laser: Texture2D
+var _view_shader: Shader
+var _audio_ready := false
+var _guns_ready := false
+var _booted := false
 var planks := 12
 var weapon_id := "pipe_pistol"
 var weapon_tier := 1
@@ -62,9 +83,21 @@ var _off_reload := 0.0
 var _off_cd := 0.0
 var _bleed := 0.0
 var _downed := false
+var _on_enemy_head := false
+var _voice: AudioStreamPlayer
+var _voice_bank: Dictionary = {}
+var _voice_last: Dictionary = {}
+var voice_log: Array[String] = []
+var head_streak := 0
+var _kill_times: Array[int] = []
+var _voice_gap_until := 0
+var _round_started_ms := 0
+var _intro_played := false
 var yaw := 0.0
 var pitch := 0.0
 var _gun_mount: Node3D
+var _sight_fix := 0.0
+var _sight_wait := 0
 var _aim := 0.0
 var _sprint := 0.0
 var _down_t := 0.0
@@ -94,23 +127,82 @@ var _nozzle := 0
 
 func _ready() -> void:
 	add_to_group("player")
-	collision_mask = 5
+	collision_mask = 7
 	floor_snap_length = 0.4
 	floor_max_angle = deg_to_rad(50.0)
 	floor_constant_speed = true
+	_slots = [_empty_slot(), _empty_slot()]
+	var starter := Economy.weapon("pipe_pistol")
+	mag = int(starter.mag)
+	reserve = int(starter.reserve)
 	_ensure_inputs()
+	if _boot_now():
+		load_guns()
+		load_audio()
+		load_shader()
+		finish_boot()
+
+func _boot_now() -> bool:
+	var args := OS.get_cmdline_user_args()
+	return "--smoke" in args or "--audit" in args or "--gunfit" in args or "--boards" in args or "--ads" in args or _nav_boot(args) or "--voices" in args
+
+func _nav_boot(args: PackedStringArray) -> bool:
+	for arg in args:
+		if arg.begins_with("--nav"):
+			return true
+	return false
+
+func load_guns() -> void:
+	if _guns_ready:
+		return
+	_guns_ready = true
+	for path in GUN_PATHS:
+		load(path)
+	_flash_gun = load("res://assets/fx/muzzle_gun.png")
+	_flash_laser = load("res://assets/fx/muzzle_laser.png")
+
+func load_audio() -> void:
+	if _audio_ready:
+		return
+	_audio_ready = true
+	for id in SHOT_PATHS:
+		_shots[id] = load(str(SHOT_PATHS[id]))
+	_reload_stream = load("res://assets/audio/reload_ak.wav")
+	_shot_heavy = load("res://assets/audio/shot_deagle.wav")
+	_shot_blaster = load("res://assets/audio/sci_blaster.mp3")
+	_shot_sci = load("res://assets/audio/sci_gunshot.mp3")
+
+func load_shader() -> void:
+	if _view_shader == null:
+		_view_shader = load("res://shaders/viewmodel.gdshader")
+
+func finish_boot() -> void:
+	if _booted:
+		return
+	load_guns()
+	load_audio()
+	load_shader()
+	_booted = true
 	_build_viewmodel()
 	_gunshot = AudioStreamPlayer.new()
-	_gunshot.volume_db = -4.0
+	_gunshot.volume_db = 6.0
 	add_child(_gunshot)
 	_reload_sfx = AudioStreamPlayer.new()
-	_reload_sfx.stream = RELOAD_SFX
+	_reload_sfx.stream = _reload_stream
 	_reload_sfx.volume_db = -6.0
 	add_child(_reload_sfx)
 	weapon_changed.connect(_show_gun)
 	_slots = [_empty_slot(), _empty_slot()]
 	_load_weapon("pipe_pistol", 1, true)
 	_store_slot()
+	_voice = AudioStreamPlayer.new()
+	_voice.volume_db = 0.0
+	_voice.pitch_scale = 1.0
+	add_child(_voice)
+	if not _voice_blocked():
+		GameState.match_started.connect(_on_match_voice)
+		GameState.round_changed.connect(_on_round_voice)
+		GameState.rounds_cleared_changed.connect(_on_clear_voice)
 	GameState.character_assigned.connect(_on_character)
 	health_changed.emit(health, max_health)
 	cash_changed.emit(cash)
@@ -194,8 +286,15 @@ func _physics_process(delta: float) -> void:
 	var sprinting := _focus == "sprint" and Input.is_action_pressed("move_forward") and not Input.is_action_pressed("move_back")
 	_sprint = move_toward(_sprint, 1.0 if sprinting else 0.0, delta * 7.0)
 	if _gun_mount:
+		if _sight_wait > 0:
+			_sight_wait -= 1
+			if _sight_wait == 0:
+				_lock_sight()
 		var hip := Vector3(0.0, -0.14, -0.30) if _akimbo() else HIP_GUN
-		var held := hip if _akimbo() else hip.lerp(ADS_GUN, _aim)
+		var rig_pos: Vector3 = _arm_rig().pos
+		var ads := ADS_GUN
+		ads.x = -rig_pos.x + _sight_fix
+		var held := hip if _akimbo() else hip.lerp(ads, _aim)
 		var reloading := 0.0
 		if _reload > 0.0 and not _akimbo():
 			reloading = sin(clampf(1.0 - _reload / 1.15, 0.0, 1.0) * PI)
@@ -207,14 +306,16 @@ func _physics_process(delta: float) -> void:
 		speed *= SPRINT_SPEED
 	velocity.x = wish.x * speed
 	velocity.z = wish.z * speed
+	var jump := is_on_floor() and Input.is_action_just_pressed("jump") and not _on_enemy_head
 	if is_on_floor():
-		if Input.is_action_just_pressed("jump"):
-			velocity.y = JUMP_SPEED
-		else:
-			velocity.y = -1.0
+		velocity.y = JUMP_SPEED if jump else -1.0
 	else:
 		velocity.y -= GRAVITY * delta
 	move_and_slide()
+	_on_enemy_head = _push_off_heads()
+	if _on_enemy_head:
+		velocity.y = -1.0
+		move_and_slide()
 	if wish.length() > 0.01:
 		_step_up(wish)
 	_tick_board(delta)
@@ -547,6 +648,112 @@ func _on_character(id: String) -> void:
 	mesh.material_override = mat
 	_hide_body_from_own_camera()
 	GameState.toast(CharacterDB.display_name(id))
+	load_voice_bank(id)
+
+func _voice_blocked() -> bool:
+	var args := OS.get_cmdline_user_args()
+	for flag in ["--smoke", "--menu", "--audit", "--gunfit", "--boards", "--voices"]:
+		if flag in args:
+			return true
+	for arg in args:
+		if arg.begins_with("--nav"):
+			return true
+	return false
+
+func load_voice_bank(id: String) -> void:
+	_voice_bank.clear()
+	_voice_last.clear()
+	for trigger in ["intro", "multikill", "headshots", "fastclear"]:
+		var clips: Array[AudioStream] = []
+		for n in range(1, 4):
+			var path := "res://assets/audio/voices/%s/%s_%d.mp3" % [id, trigger, n]
+			if ResourceLoader.exists(path):
+				var stream := load(path) as AudioStream
+				if stream:
+					clips.append(stream)
+		_voice_bank[trigger] = clips
+
+func voice_count(trigger: String) -> int:
+	var clips: Variant = _voice_bank.get(trigger, [])
+	return (clips as Array).size()
+
+func note_kill(headshot: bool) -> void:
+	var now := Time.get_ticks_msec()
+	if headshot:
+		head_streak += 1
+		if head_streak >= 3:
+			head_streak = 0
+			cue_line("headshots")
+	else:
+		head_streak = 0
+	var kept: Array[int] = []
+	for at in _kill_times:
+		if now - at <= 2000:
+			kept.append(at)
+	kept.append(now)
+	_kill_times = kept
+	if _kill_times.size() >= 3:
+		_kill_times.clear()
+		cue_line("multikill")
+
+func cue_line(trigger: String) -> bool:
+	if Time.get_ticks_msec() < _voice_gap_until:
+		return false
+	var clips: Array = _voice_bank.get(trigger, [])
+	if clips.is_empty() or _voice == null:
+		return false
+	var pick := randi() % clips.size()
+	var previous := int(_voice_last.get(trigger, -1))
+	if clips.size() > 1 and pick == previous:
+		pick = (pick + 1) % clips.size()
+	_voice_last[trigger] = pick
+	var stream := clips[pick] as AudioStream
+	_voice.stream = stream
+	_voice.play()
+	var length := stream.get_length()
+	if length < 0.05:
+		length = 1.0
+	var now := Time.get_ticks_msec()
+	_voice_gap_until = now + int(length * 1000.0) + int(randf_range(5.0, 10.0) * 1000.0)
+	voice_log.append("%s:%d" % [trigger, pick])
+	return true
+
+func _on_match_voice() -> void:
+	_intro_played = false
+	head_streak = 0
+	_kill_times.clear()
+	load_voice_bank(GameState.character_id)
+	var timer := get_tree().create_timer(0.75)
+	timer.timeout.connect(_play_intro, CONNECT_ONE_SHOT)
+
+func _play_intro() -> void:
+	if _intro_played or not GameState.running or GameState.over:
+		return
+	_intro_played = true
+	cue_line("intro")
+
+func _on_round_voice(_index: int) -> void:
+	_round_started_ms = Time.get_ticks_msec()
+
+func _on_clear_voice(_count: int) -> void:
+	score_round_clear()
+
+func reset_voice_state() -> void:
+	voice_log.clear()
+	head_streak = 0
+	_kill_times.clear()
+	_voice_gap_until = 0
+	_voice_last.clear()
+
+func score_round_clear() -> void:
+	var director := get_node_or_null("/root/RoundDirector")
+	if director == null:
+		return
+	var players := int(director.call("_player_count"))
+	var budget := int(director.call("_wave_budget", GameState.round_index, players))
+	var elapsed := float(Time.get_ticks_msec() - _round_started_ms) / 1000.0
+	if elapsed < 20.0 + 3.0 * float(budget):
+		cue_line("fastclear")
 
 func _load_weapon(id: String, tier: int, fill: bool) -> void:
 	weapon_id = id
@@ -798,6 +1005,7 @@ func _shoot_ray(spread: float, hand_bias: float = 0.0) -> void:
 	var skip: Array[RID] = [get_rid()]
 	var pierced := 0
 	var impact := origin + dir * 16.0
+	var hurt: Array[Node] = []
 	for _hop in 16:
 		if remain <= 0.05:
 			break
@@ -811,10 +1019,13 @@ func _shoot_ray(spread: float, hand_bias: float = 0.0) -> void:
 		var body: Object = hit.collider
 		var node := body as Node
 		if node and node.is_in_group("enemies"):
-			var dealt := shot_damage()
-			if weapon_id == "pop_junk":
-				dealt *= pow(0.85, float(pierced))
-			node.call("take_damage", dealt, self, _hit_head(body, hit))
+			if node not in hurt:
+				var dealt := shot_damage()
+				if weapon_id == "pop_junk":
+					dealt *= pow(0.85, float(pierced))
+				node.call("take_damage", dealt, self, _hit_head(body, hit))
+				hurt.append(node)
+				_ledger_splash(node as Node3D, dealt, hurt)
 			pierced += 1
 			var keep := weapon_id == "ledger_cannon" or (weapon_id == "pop_junk" and pierced < _laser_pierce())
 			if not keep:
@@ -838,6 +1049,18 @@ func _shoot_ray(spread: float, hand_bias: float = 0.0) -> void:
 		remain -= traveled + 0.08
 		from = hit.position + dir * 0.08
 	_spawn_tracer(dir, impact, hand_bias)
+
+func _ledger_splash(struck: Node3D, dealt: float, hurt: Array[Node]) -> void:
+	if weapon_id != "ledger_cannon" or struck == null:
+		return
+	for other in get_tree().get_nodes_in_group("enemies"):
+		var body := other as Node3D
+		if body == null or body in hurt:
+			continue
+		if body.global_position.distance_to(struck.global_position) > 1.5:
+			continue
+		hurt.append(body)
+		body.call("take_damage", dealt, self, false)
 
 func _laser_pierce() -> int:
 	var wave := GameState.round_index
@@ -1063,6 +1286,27 @@ func _hero_scream() -> void:
 	player.finished.connect(player.queue_free)
 	player.play()
 
+func _push_off_heads() -> bool:
+	var support: Node3D = null
+	for i in get_slide_collision_count():
+		var hit := get_slide_collision(i)
+		if hit.get_normal().y <= 0.5:
+			continue
+		var other: Object = hit.get_collider()
+		if other is Node and (other as Node).is_in_group("enemies"):
+			support = other as Node3D
+			break
+	if support == null:
+		return false
+	var away := global_position - support.global_position
+	away.y = 0.0
+	if away.length_squared() < 0.0001:
+		away = Vector3.RIGHT
+	away = away.normalized()
+	velocity.x = away.x * 4.0
+	velocity.z = away.z * 4.0
+	return true
+
 func _step_up(dir: Vector3) -> void:
 	var space := get_world_3d().direct_space_state
 	var feet := global_position + Vector3(0, 0.15, 0)
@@ -1099,26 +1343,26 @@ func _play_gunshot(side: int) -> void:
 		return
 	var heavy := weapon_id == "pipe_pistol" and weapon_tier >= 2
 	_gunshot.stream = _shot_stream()
-	_gunshot.volume_db = 1.5 if heavy else -4.0
+	_gunshot.volume_db = 8.0 if heavy else 6.0
 	_gunshot.pitch_scale = randf_range(0.72, 0.8) if weapon_id == "ledger_cannon" else (randf_range(0.94, 1.0) if side == 0 else randf_range(1.02, 1.08))
 	_gunshot.play()
 
 func _shot_stream() -> AudioStream:
 	if weapon_id == "ledger_cannon" or weapon_id == "pop_junk":
-		return SHOT_BLASTER
+		return _shot_blaster
 	if weapon_tier >= 3:
 		if weapon_id in ["street_smg", "rent_rifle"]:
-			return SHOT_SCI_GUN
-		return SHOT_BLASTER
+			return _shot_sci
+		return _shot_blaster
 	if weapon_id == "pipe_pistol" and weapon_tier >= 2:
-		return SHOT_HEAVY
-	return SHOTS.get(weapon_id, SHOTS["pipe_pistol"])
+		return _shot_heavy
+	return _shots.get(weapon_id, _shots["pipe_pistol"]) as AudioStream
 
 func _laser_muzzle() -> bool:
 	return weapon_id == "pop_junk" or weapon_id == "ledger_cannon" or weapon_tier >= 3
 
 func _flash_tex(laser: bool) -> Texture2D:
-	return FLASH_LASER if laser else FLASH_GUN
+	return _flash_laser if laser else _flash_gun
 
 func _muzzle_index(side: int) -> int:
 	if _akimbo() and _muzzle_guns.size() > 1:
@@ -1361,7 +1605,9 @@ func _spawn_tracer(_dir: Vector3, impact: Vector3, hand_bias: float = 0.0) -> vo
 	var streak := MeshInstance3D.new()
 	var box := BoxMesh.new()
 	var thick := 0.022 if laser else 0.008
-	if weapon_id == "debt_shotgun" and not laser:
+	if weapon_id == "ledger_cannon":
+		thick = 0.066
+	elif weapon_id == "debt_shotgun" and not laser:
 		thick = 0.005
 	box.size = Vector3(thick, thick, dist)
 	streak.mesh = box
@@ -1385,7 +1631,9 @@ func _spawn_tracer(_dir: Vector3, impact: Vector3, hand_bias: float = 0.0) -> vo
 	tw.tween_callback(streak.queue_free)
 
 func _ads_fov() -> float:
-	if weapon_id in ["debt_shotgun", "rent_rifle", "ledger_cannon"]:
+	if weapon_id == "rent_rifle":
+		return ADS_FOV_RIFLE
+	if weapon_id in ["debt_shotgun", "ledger_cannon"]:
 		return ADS_FOV_LONG
 	return ADS_FOV
 
@@ -1424,6 +1672,27 @@ func _show_gun() -> void:
 	else:
 		_spawn_arm(rig_packed, arms, 0.0, false)
 	_hold_idle()
+	_sight_fix = 0.0
+	_sight_wait = 2
+
+func _lock_sight() -> void:
+	_sight_fix = 0.0
+	if _akimbo() or _gun_mount == null or camera == null:
+		return
+	var rig_pos: Vector3 = _arm_rig().pos
+	var saved := _gun_mount.position
+	_gun_mount.position = Vector3(-rig_pos.x, ADS_GUN.y, ADS_GUN.z)
+	camera.force_update_transform()
+	_gun_mount.force_update_transform()
+	var local := camera.global_transform.affine_inverse() * _sight_point()
+	_sight_fix = -local.x
+	_gun_mount.position = saved
+
+func _sight_point() -> Vector3:
+	var gun := _gun_mount.find_child("HeldGun", true, false) as Node3D
+	if gun != null:
+		return _visual_aabb(gun).get_center()
+	return _barrel_tip(0)
 
 func _spawn_arm(packed: PackedScene, arms: Dictionary, spread: float, mirror: bool) -> void:
 	var pivot := Node3D.new()
@@ -1557,6 +1826,8 @@ func _seat_held(rig: Node3D, path: String, model_fwd: Vector3, model_up: Vector3
 		(anim as AnimationPlayer).stop()
 	skeleton.reset_bone_poses()
 	skeleton.force_update_all_bone_transforms()
+	camera.force_update_transform()
+	skeleton.force_update_transform()
 	var packed := load(path) as PackedScene
 	if packed == null:
 		return
@@ -1722,7 +1993,7 @@ func _color_viewmodel(node: Node) -> void:
 	mesh_inst.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	for surface in mesh_inst.mesh.get_surface_count():
 		var flat := ShaderMaterial.new()
-		flat.shader = VIEWMODEL_SHADER
+		flat.shader = _view_shader
 		var tint := Color.WHITE
 		var tex: Texture2D = null
 		var source := mesh_inst.get_active_material(surface)

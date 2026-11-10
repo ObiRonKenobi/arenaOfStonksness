@@ -51,6 +51,80 @@ func outward() -> Vector3:
 		return Vector3.FORWARD
 	return flat.normalized()
 
+const LANE_SIDE: Array[float] = [-0.37, 0.37]
+var lane_owner: Array = [null, null]
+var lane_since: Array[float] = [0.0, 0.0]
+
+func _side() -> Vector3:
+	var out := outward()
+	var side := Vector3(-out.z, 0.0, out.x)
+	if side.length_squared() < 0.0001:
+		return Vector3.RIGHT
+	return side.normalized()
+
+func lip(lane: int) -> Vector3:
+	var spot := global_position + outward() * 0.95 + _side() * LANE_SIDE[lane]
+	spot.y = 0.0
+	return spot
+
+func wait_spot(lane: int) -> Vector3:
+	var spot := lip(lane) + outward() * 1.8
+	spot.y = 0.0
+	return spot
+
+func landing(lane: int) -> Vector3:
+	var spot := global_position - outward() * 1.2 + _side() * LANE_SIDE[lane]
+	spot.y = 0.0
+	return spot
+
+func claim_lane(body: Node) -> int:
+	var best := -1
+	var best_d := 2.2
+	for i in 2:
+		if not _lane_free(i):
+			continue
+		var flat := (body as Node3D).global_position - lip(i)
+		flat.y = 0.0
+		var dist := flat.length()
+		if dist <= best_d:
+			best = i
+			best_d = dist
+	if best >= 0:
+		lane_owner[best] = body
+		lane_since[best] = _now()
+	return best
+
+func release_lane(body: Node) -> void:
+	for i in 2:
+		if lane_owner[i] == body:
+			lane_owner[i] = null
+			lane_since[i] = 0.0
+
+func lane_of(body: Node) -> int:
+	for i in 2:
+		if lane_owner[i] == body:
+			return i
+	return -1
+
+func _lane_free(i: int) -> bool:
+	var owner: Object = lane_owner[i]
+	if not owner is Node or not is_instance_valid(owner):
+		lane_owner[i] = null
+		return true
+	var node := owner as Node
+	if bool(node.get("_dead")):
+		lane_owner[i] = null
+		lane_since[i] = 0.0
+		return true
+	if not bool(node.get("_climbing")) and _now() - lane_since[i] > 3.0:
+		lane_owner[i] = null
+		lane_since[i] = 0.0
+		return true
+	return false
+
+func _now() -> float:
+	return float(Engine.get_physics_frames()) / float(Engine.physics_ticks_per_second)
+
 func board(player: Node) -> void:
 	if boards >= max_boards:
 		return
