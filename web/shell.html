@@ -15,7 +15,12 @@ html, body {
 
 body {
 	color: #f3ead6;
-	background-color: #0d0b0b;
+	/* Brick wall frame fills the browser; game stays a fixed window on top. */
+	background-color: #4a2a22;
+	background-image: url("brick.png");
+	background-repeat: repeat;
+	background-position: center;
+	background-size: 256px 256px;
 	overflow: hidden;
 	touch-action: none;
 	font-family: "Segoe UI", sans-serif;
@@ -24,16 +29,28 @@ body {
 	justify-content: center;
 }
 
-/* Fixed game window (project 854x480 / 480p). Do not fill the browser. */
-#canvas {
-	display: block;
+#game-frame {
 	width: 854px;
 	height: 480px;
-	max-width: 100vw;
-	max-height: 100vh;
+	max-width: calc(100vw - 24px);
+	max-height: calc(100vh - 24px);
 	aspect-ratio: 16 / 9;
 	background: #000;
-	box-shadow: 0 0 0 1px #5c4a34;
+	box-shadow:
+		0 0 0 4px #2a1814,
+		0 0 0 8px #6b3d32,
+		0 12px 40px rgba(0, 0, 0, 0.55);
+	position: relative;
+	flex: 0 0 auto;
+}
+
+#canvas {
+	display: block;
+	width: 100% !important;
+	height: 100% !important;
+	max-width: none !important;
+	max-height: none !important;
+	background: #000;
 }
 
 #canvas:focus {
@@ -46,12 +63,13 @@ body {
 	left: 0;
 	right: 0;
 	bottom: 0;
-	background-color: #0d0b0b;
+	background-color: rgba(13, 11, 11, 0.92);
 	display: flex;
 	flex-direction: column;
 	justify-content: center;
 	align-items: center;
 	visibility: visible;
+	z-index: 2;
 }
 
 #status-splash {
@@ -116,23 +134,25 @@ body {
 		$GODOT_HEAD_INCLUDE
 	</head>
 	<body>
-		<canvas id="canvas">
-			Your browser does not support the canvas tag.
-		</canvas>
+		<div id="game-frame">
+			<canvas id="canvas">
+				Your browser does not support the canvas tag.
+			</canvas>
+			<div id="status">
+				<img id="status-splash" class="show-image--false" src="$GODOT_SPLASH" alt="">
+				<div id="stonks">
+					<div id="stonks-title">$GODOT_PROJECT_NAME</div>
+					<div id="stonks-line">Maximizing Stonksitude</div>
+					<div id="stonks-track"><div id="stonks-fill"></div></div>
+					<div id="stonks-percent">0%</div>
+				</div>
+				<progress id="status-progress"></progress>
+				<div id="status-notice"></div>
+			</div>
+		</div>
 		<noscript>
 			Your browser does not support JavaScript.
 		</noscript>
-		<div id="status">
-			<img id="status-splash" class="show-image--false" src="$GODOT_SPLASH" alt="">
-			<div id="stonks">
-				<div id="stonks-title">$GODOT_PROJECT_NAME</div>
-				<div id="stonks-line">Maximizing Stonksitude</div>
-				<div id="stonks-track"><div id="stonks-fill"></div></div>
-				<div id="stonks-percent">0%</div>
-			</div>
-			<progress id="status-progress"></progress>
-			<div id="status-notice"></div>
-		</div>
 		<script src="$GODOT_URL"></script>
 		<script>
 const GODOT_CONFIG = $GODOT_CONFIG;
@@ -145,9 +165,16 @@ const engine = new Engine(GODOT_CONFIG);
 	const statusNotice = document.getElementById('status-notice');
 	const stonksFill = document.getElementById('stonks-fill');
 	const stonksPercent = document.getElementById('stonks-percent');
+	const canvas = document.getElementById('canvas');
 
 	let initializing = true;
 	let statusMode = '';
+
+	function lockCanvasDisplay() {
+		// Keep the visible window fixed even if the engine touches canvas style.
+		canvas.style.setProperty('width', '100%', 'important');
+		canvas.style.setProperty('height', '100%', 'important');
+	}
 
 	function setDownload(current, total) {
 		let pct = 0;
@@ -170,6 +197,7 @@ const engine = new Engine(GODOT_CONFIG);
 		if (mode === 'hidden') {
 			statusOverlay.remove();
 			initializing = false;
+			lockCanvasDisplay();
 			return;
 		}
 		statusOverlay.style.visibility = 'visible';
@@ -200,6 +228,8 @@ const engine = new Engine(GODOT_CONFIG);
 		setStatusMode('notice');
 		initializing = false;
 	}
+
+	window.addEventListener('resize', lockCanvasDisplay);
 
 	const missing = Engine.getMissingFeatures({
 		threads: GODOT_THREADS_ENABLED,
@@ -241,6 +271,7 @@ const engine = new Engine(GODOT_CONFIG);
 			},
 		}).then(() => {
 			setStatusMode('hidden');
+			lockCanvasDisplay();
 		}, displayFailureNotice);
 	}
 }());
