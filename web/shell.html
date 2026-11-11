@@ -5,10 +5,12 @@
 		<meta name="viewport" content="width=device-width, user-scalable=no, initial-scale=1.0">
 		<title>$GODOT_PROJECT_NAME</title>
 		<style>
-html, body, #canvas {
+html, body {
 	margin: 0;
 	padding: 0;
 	border: 0;
+	width: 100%;
+	height: 100%;
 }
 
 body {
@@ -17,10 +19,21 @@ body {
 	overflow: hidden;
 	touch-action: none;
 	font-family: "Segoe UI", sans-serif;
+	display: flex;
+	align-items: center;
+	justify-content: center;
 }
 
+/* Fixed game window (project 1280x720). Do not fill the browser. */
 #canvas {
 	display: block;
+	width: 1280px;
+	height: 720px;
+	max-width: 100vw;
+	max-height: 100vh;
+	aspect-ratio: 16 / 9;
+	background: #000;
+	box-shadow: 0 0 0 1px #5c4a34;
 }
 
 #canvas:focus {
