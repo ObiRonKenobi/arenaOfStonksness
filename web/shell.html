@@ -29,12 +29,12 @@ body {
 	justify-content: center;
 }
 
+/* ~1280x720 window with brick margin (matches the on-screen target frame). */
 #game-frame {
-	width: 854px;
-	height: 480px;
-	max-width: calc(100vw - 24px);
-	max-height: calc(100vh - 24px);
+	width: min(1280px, 86vw);
+	height: auto;
 	aspect-ratio: 16 / 9;
+	max-height: 86vh;
 	background: #000;
 	box-shadow:
 		0 0 0 4px #2a1814,
