@@ -1,6 +1,13 @@
 extends Node3D
 
 func _ready() -> void:
+	# Web trial: draw the 3D view at 75% and cap texture filtering at 4x.
+	# Delete this block to restore the previous look. Paths and the alive cap stay put.
+	if OS.has_feature("web"):
+		var vp := get_viewport()
+		vp.scaling_3d_mode = Viewport.SCALING_3D_MODE_BILINEAR
+		vp.scaling_3d_scale = 0.75
+		vp.anisotropic_filtering_level = Viewport.ANISOTROPY_4X
 	_ensure_inputs()
 	GameState.reset()
 	for arg in OS.get_cmdline_user_args():
