@@ -13,7 +13,7 @@ const EARLY_BUDGET := [
 	[10, 12, 21, 29, 37, 45, 49, 52, 56],
 ]
 var _alive := 0
-var _alive_cap := 30
+var _alive_cap := 20
 var _players := 1
 var _budget := 0
 var _spawned := 0
@@ -116,11 +116,8 @@ func _begin_kings() -> void:
 	_emit_counts()
 	GameState.toast("King round")
 
-func _cap_for(wave: int, players: int) -> int:
-	var cap := 30 + 10 * (players - 1)
-	if wave >= 20:
-		cap += 5 * int(wave / 10) - 5
-	return cap
+func _cap_for(_wave: int, players: int) -> int:
+	return 20 + 10 * (players - 1)
 
 func _spawn_batch() -> int:
 	var room := _alive_cap - _alive
